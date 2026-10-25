@@ -2,6 +2,17 @@
 
 IRL hide-and-seek on your phone: hiders get a head start, seekers get pinged with hider locations on a live map. See [PLAN.md](PLAN.md) for the full design.
 
+**Play:** https://dbig-d.github.io/manhunt/
+
+## Where it's hosted
+
+| Part | Where | How it updates |
+|---|---|---|
+| Website | GitHub Pages: https://dbig-d.github.io/manhunt/ | Automatically on every push to `main` (see `.github/workflows/pages.yml`) |
+| Game server | Cloudflare Workers: https://manhunt.netherite2022.workers.dev | Run `npm run deploy` after changing anything in `worker/` or `shared/` |
+
+The website finds the game server through the repository variable `API_URL`. The game server also serves its own copy of the website, so the workers.dev link works for playing too.
+
 ## Run it on your computer
 
 ```bash
@@ -25,7 +36,8 @@ Open http://localhost:5173.
 |---|---|
 | `npm test` | Runs the game-rule tests (pings, visibility, tagging, win conditions, boundaries) |
 | `npm run build` | Checks the code and builds the site into `dist/` |
-| `npm run deploy` | Builds and publishes to Cloudflare (run `npx wrangler login` once first) |
+| `npm run deploy` | Builds and publishes the game server to Cloudflare (needs `npx wrangler login` first) |
+| `npm run build:pages` | Builds just the website the way GitHub Pages serves it |
 
 ## How it's put together
 
