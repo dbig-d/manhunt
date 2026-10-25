@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "manhunt",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-09-01",
+  // The website (built by Vite) is served as static assets.
+  // Requests to /api/* go to our Worker code first.
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  // One GameRoom Durable Object = one game room (looked up by room code).
+  "durable_objects": {
+    "bindings": [{ "name": "GAME_ROOM", "class_name": "GameRoom" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["GameRoom"] }],
+  "observability": { "enabled": true }
+}

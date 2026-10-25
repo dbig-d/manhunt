@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Manhunt Style Directions</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,500;62..125,700;62..125,900&family=Chakra+Petch:wght@500;700&family=Fredoka:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet" />
+<style>
+  /* ---------- Page shell (neutral, not one of the directions) ---------- */
+  :root {
+    --page-bg: #ebe9e4;
+    --page-fg: #1b1a18;
+    --page-muted: #6d6a63;
+    --page-card: #f7f6f3;
+    --page-line: #d6d3cc;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page-bg: #161614;
+      --page-fg: #f1efe9;
+      --page-muted: #9b978e;
+      --page-card: #1f1f1c;
+      --page-line: #33322e;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page-bg);
+    color: var(--page-fg);
+    font-family: Inter, system-ui, sans-serif;
+    line-height: 1.5;
+  }
+  .page { max-width: 1120px; margin: 0 auto; padding: 48px 16px 80px; }
+  .page > header h1 { font-size: clamp(2rem, 5vw, 3rem); margin: 0; letter-spacing: -0.03em; }
+  .page > header p { color: var(--page-muted); max-width: 640px; margin: 8px 0 0; }
+
+  .direction {
+    margin-top: 56px;
+    padding-top: 32px;
+    border-top: 1px solid var(--page-line);
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 32px;
+    align-items: start;
+  }
+  @media (max-width: 960px) { .direction { grid-template-columns: 1fr; } }
+
+  .info .num { font-size: 0.8rem; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--page-muted); }
+  .info h2 { font-size: 2rem; margin: 4px 0 6px; letter-spacing: -0.02em; }
+  .info .pitch { margin: 0 0 20px; font-size: 1.05rem; }
+  .info dl { margin: 0; display: grid; gap: 12px; }
+  .info dt { font-size: 0.75rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--page-muted); }
+  .info dd { margin: 2px 0 0; }
+  .swatches { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+  .sw { display: flex; align-items: center; gap: 8px; font-size: 0.8rem; background: var(--page-card); border: 1px solid var(--page-line); padding: 4px 10px 4px 4px; border-radius: 999px; }
+  .sw i { width: 20px; height: 20px; border-radius: 50%; border: 1px solid rgba(0,0,0,.15); }
+
+  .phones { display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; }
+
+  /* ---------- Phone frame ---------- */
+  .phone {
+    width: 300px;
+    height: 620px;
+    border-radius: 40px;
+    padding: 10px;
+    background: #0d0d0d;
+    box-shadow: 0 20px 40px -20px rgba(0,0,0,.45);
+    flex: none;
+  }
+  .screen {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    border-radius: 31px;
+    overflow: hidden;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-body);
+  }
+  .statusbar {
+    position: absolute; top: 0; left: 0; right: 0; z-index: 5;
+    display: flex; justify-content: space-between;
+    padding: 10px 22px 0;
+    font: 600 12px/1 Inter, system-ui, sans-serif;
+    color: var(--ink);
+  }
+
+  /* ---------- Lobby screen (shared markup, themed by variables) ---------- */
+  .lobby { display: flex; flex-direction: column; gap: 12px; padding: 40px 16px 16px; }
+  .lobby-head { text-align: center; }
+  .eyebrow { font: var(--eyebrow-font); letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+  .code { font: var(--code-font); color: var(--code-color); letter-spacing: var(--code-spacing); line-height: 1; margin: 4px 0; }
+  .sub { font-size: 12px; color: var(--muted); }
+
+  .card {
+    background: var(--panel);
+    border: var(--border-w) solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 10px 12px;
+  }
+  .card-title { display: flex; justify-content: space-between; align-items: center; font: var(--label-font); margin-bottom: 6px; }
+  .chip { font: 700 9px/1 var(--font-data); letter-spacing: 0.1em; padding: 4px 6px; border-radius: calc(var(--radius) / 2); background: var(--accent); color: var(--on-accent); }
+  .row { display: flex; justify-content: space-between; font-size: 12px; padding: 3px 0; border-top: 1px solid var(--line-soft); }
+  .row:first-of-type { border-top: 0; }
+  .row span { color: var(--muted); }
+  .row b { font-family: var(--font-data); font-weight: 700; }
+
+  .players { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .player {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12px; font-weight: 600;
+    background: var(--panel);
+    border: var(--border-w) solid var(--line);
+    border-radius: var(--radius);
+    padding: 5px 6px;
+    box-shadow: var(--shadow-sm);
+  }
+  .avatar {
+    width: 22px; height: 22px; border-radius: var(--avatar-radius);
+    display: grid; place-items: center;
+    font: 700 11px/1 var(--font-data);
+    color: var(--on-accent);
+    background: var(--c, var(--accent));
+    flex: none;
+  }
+  .badge { margin-left: auto; font: 700 8px/1 var(--font-data); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+
+  .btn {
+    margin-top: auto;
+    appearance: none;
+    border: var(--border-w) solid var(--btn-line);
+    border-radius: var(--radius);
+    background: var(--accent);
+    color: var(--on-accent);
+    font: var(--btn-font);
+    letter-spacing: var(--btn-spacing);
+    text-transform: var(--btn-case);
+    padding: 14px;
+    box-shadow: var(--shadow);
+  }
+
+  /* ---------- Hunt screen ---------- */
+  .map { position: absolute; inset: 0; }
+  .map svg { width: 100%; height: 100%; display: block; }
+  .hud {
+    position: absolute; top: 34px; left: 12px; right: 12px; z-index: 3;
+    display: flex; align-items: stretch; gap: 6px;
+  }
+  .hud > div {
+    background: var(--panel);
+    border: var(--border-w) solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-sm);
+    padding: 6px 8px;
+    display: flex; flex-direction: column; justify-content: center;
+    backdrop-filter: blur(8px);
+  }
+  .hud .label { font: var(--eyebrow-font); font-size: 8px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+  .hud .val { font: var(--hud-font); line-height: 1.1; }
+  .hud .role { background: var(--seeker); border-color: var(--seeker-line); }
+  .hud .role .label, .hud .role .val { color: var(--on-seeker); }
+  .hud .clock { flex: 1; text-align: center; align-items: center; }
+  .hud .clock .val { font: var(--clock-font); }
+
+  .bottom { position: absolute; left: 12px; right: 12px; bottom: 14px; z-index: 3; display: grid; gap: 8px; }
+  .pingbar {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--panel);
+    border: var(--border-w) solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-sm);
+    padding: 8px 10px;
+    backdrop-filter: blur(8px);
+  }
+  .ring {
+    --p: 70%;
+    width: 34px; height: 34px; border-radius: 50%; flex: none;
+    background: conic-gradient(var(--hider) var(--p), var(--line-soft) 0);
+    display: grid; place-items: center;
+  }
+  .ring::after { content: ""; width: 24px; height: 24px; border-radius: 50%; background: var(--panel-solid); }
+  .pingbar .val { font: var(--hud-font); }
+  .pingbar .label { font: var(--eyebrow-font); font-size: 8px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+  .pingbar .note { margin-left: auto; font-size: 10px; color: var(--muted); text-align: right; }
+
+  .actions { display: grid; grid-template-columns: 1fr 1.4fr 1fr; gap: 6px; }
+  .actions button {
+    appearance: none;
+    border: var(--border-w) solid var(--line);
+    border-radius: var(--radius);
+    background: var(--panel);
+    color: var(--ink);
+    font: var(--small-btn-font);
+    letter-spacing: var(--btn-spacing);
+    text-transform: var(--btn-case);
+    padding: 12px 4px;
+    box-shadow: var(--shadow-sm);
+    backdrop-filter: blur(8px);
+  }
+  .actions button.primary { background: var(--seeker); color: var(--on-seeker); border-color: var(--seeker-line); }
+
+  /* Map paint, driven by theme variables */
+  .m-bg { fill: var(--m-block); }
+  .m-road { stroke: var(--m-road); fill: none; stroke-linecap: round; }
+  .m-road-edge { stroke: var(--m-road-edge); fill: none; stroke-linecap: round; }
+  .m-park { fill: var(--m-park); }
+  .m-water { fill: var(--m-water); }
+  .m-outside { fill: var(--m-outside); fill-rule: evenodd; }
+  .m-boundary { fill: none; stroke: var(--boundary); stroke-width: var(--boundary-w); stroke-dasharray: var(--boundary-dash); }
+  .m-zone { fill: var(--zone); fill-opacity: .22; stroke: var(--zone); stroke-width: 2; }
+  .m-zone-label { fill: var(--zone-text); font: 700 10px var(--font-data); text-anchor: middle; }
+  .m-hider { fill: var(--hider); stroke: var(--dot-ring); stroke-width: 2; }
+  .m-fuzzy { fill: var(--hider); fill-opacity: .2; stroke: var(--hider); stroke-width: 1.5; stroke-dasharray: 3 3; }
+  .m-seeker { fill: var(--seeker); stroke: var(--dot-ring); stroke-width: 2.5; }
+  .m-cone { fill: var(--seeker); fill-opacity: .25; }
+  .m-label { font: 700 10px var(--font-data); fill: var(--ink); paint-order: stroke; stroke: var(--m-halo); stroke-width: 3px; stroke-linejoin: round; }
+  .m-label.sub { font-weight: 400; font-size: 9px; fill: var(--muted); }
+  .old { opacity: .45; }
+  .pulse { transform-box: fill-box; transform-origin: center; animation: pulse 2s ease-out infinite; }
+  @keyframes pulse { from { transform: scale(1); opacity: .7; } to { transform: scale(2.6); opacity: 0; } }
+
+  /* =================== Direction 1: Night Ops =================== */
+  .theme-ops {
+    --bg: #07090d; --panel: rgba(12, 17, 25, .82); --panel-solid: #0c1119;
+    --ink: #d9e4f0; --muted: #6f8197; --line: #1e2a3a; --line-soft: #1a2432;
+    --seeker: #ff3b4e; --seeker-line: #ff3b4e; --on-seeker: #12020a;
+    --hider: #3dff9a; --zone: #ffb020; --zone-text: #ffcf70;
+    --accent: #3dff9a; --on-accent: #04140b; --btn-line: #3dff9a;
+    --radius: 6px; --avatar-radius: 3px; --border-w: 1px;
+    --shadow: 0 0 0 1px rgba(61,255,154,.05), 0 0 24px -6px rgba(61,255,154,.35);
+    --shadow-sm: none;
+    --font-body: "Chakra Petch", sans-serif; --font-data: "JetBrains Mono", monospace;
+    --eyebrow-font: 500 10px "JetBrains Mono", monospace;
+    --code-font: 700 52px "JetBrains Mono", monospace; --code-color: #3dff9a; --code-spacing: 0.12em;
+    --label-font: 700 12px "Chakra Petch", sans-serif;
+    --btn-font: 700 15px "Chakra Petch", sans-serif; --small-btn-font: 700 11px "Chakra Petch", sans-serif;
+    --btn-spacing: 0.14em; --btn-case: uppercase;
+    --hud-font: 700 13px "JetBrains Mono", monospace; --clock-font: 700 22px "JetBrains Mono", monospace;
+    --m-block: #0b1018; --m-road: #152030; --m-road-edge: #1d2b40; --m-park: #0c1b15; --m-water: #0a1726;
+    --m-outside: rgba(0,0,0,.55); --boundary: #3dff9a; --boundary-w: 1.5; --boundary-dash: 6 4;
+    --dot-ring: #07090d; --m-halo: #07090d;
+  }
+  .theme-ops .code { text-shadow: 0 0 18px rgba(61,255,154,.55); }
+  .theme-ops .hud .role { box-shadow: 0 0 20px -4px rgba(255,59,78,.7); }
+  .theme-ops .actions button.primary { box-shadow: 0 0 22px -4px rgba(255,59,78,.75); }
+  .theme-ops .sweep {
+    position: absolute; left: 50%; top: 50%; width: 520px; height: 520px; margin: -260px 0 0 -260px; z-index: 1;
+    border-radius: 50%;
+    background: conic-gradient(from 0deg, rgba(61,255,154,.22), rgba(61,255,154,0) 70deg, transparent 360deg);
+    animation: spin 4s linear infinite;
+    pointer-events: none;
+  }
+  .theme-ops .scan {
+    position: absolute; inset: 0; z-index: 2; pointer-events: none;
+    background: repeating-linear-gradient(0deg, rgba(255,255,255,.025) 0 1px, transparent 1px 3px);
+  }
+  .theme-ops .m-hider { filter: drop-shadow(0 0 4px #3dff9a); }
+  .theme-ops .m-seeker { filter: drop-shadow(0 0 5px #ff3b4e); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* =================== Direction 2: Playground =================== */
+  .theme-play {
+    --bg: #fff3dc; --panel: #ffffff; --panel-solid: #ffffff;
+    --ink: #2b2350; --muted: #7a7299; --line: #2b2350; --line-soft: #ece6f7;
+    --seeker: #ff5a5f; --seeker-line: #2b2350; --on-seeker: #ffffff;
+    --hider: #19c2b0; --zone: #ffc23c; --zone-text: #2b2350;
+    --accent: #7b5cff; --on-accent: #ffffff; --btn-line: #2b2350;
+    --radius: 16px; --avatar-radius: 50%; --border-w: 2.5px;
+    --shadow: 4px 4px 0 #2b2350; --shadow-sm: 3px 3px 0 #2b2350;
+    --font-body: "Fredoka", sans-serif; --font-data: "Fredoka", sans-serif;
+    --eyebrow-font: 600 11px "Fredoka", sans-serif;
+    --code-font: 700 56px "Fredoka", sans-serif; --code-color: #7b5cff; --code-spacing: 0.04em;
+    --label-font: 600 14px "Fredoka", sans-serif;
+    --btn-font: 700 18px "Fredoka", sans-serif; --small-btn-font: 600 13px "Fredoka", sans-serif;
+    --btn-spacing: 0.01em; --btn-case: none;
+    --hud-font: 700 14px "Fredoka", sans-serif; --clock-font: 700 24px "Fredoka", sans-serif;
+    --m-block: #f7e3bd; --m-road: #ffffff; --m-road-edge: #e9cf9f; --m-park: #b4e3a2; --m-water: #9fd9f6;
+    --m-outside: rgba(43,35,80,.28); --boundary: #7b5cff; --boundary-w: 4; --boundary-dash: 10 7;
+    --dot-ring: #2b2350; --m-halo: #ffffff;
+  }
+  .theme-play .code { text-shadow: 3px 3px 0 #2b2350; -webkit-text-stroke: 1.5px #2b2350; }
+  .theme-play .lobby-head .sub { font-weight: 500; }
+  .theme-play .lobby::before {
+    content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none;
+    background: radial-gradient(circle at 12% 18%, #ffd6e0 0 34px, transparent 35px),
+                radial-gradient(circle at 92% 30%, #c9f0ea 0 26px, transparent 27px),
+                radial-gradient(circle at 85% 88%, #e2d9ff 0 44px, transparent 45px);
+  }
+  .theme-play .lobby > * { position: relative; z-index: 1; }
+  .theme-play .hud .role { transform: rotate(-3deg); }
+  .theme-play .m-zone { fill-opacity: .55; stroke: #2b2350; stroke-width: 2.5; }
+  .theme-play .m-hider, .theme-play .m-seeker { animation: bob 1.6s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+  .theme-play .btn:active { transform: translate(2px, 2px); box-shadow: 2px 2px 0 #2b2350; }
+  @keyframes bob { 50% { transform: translateY(-2px); } }
+
+  /* =================== Direction 3: Field Kit =================== */
+  .theme-field {
+    --bg: #ffffff; --panel: #ffffff; --panel-solid: #ffffff;
+    --ink: #0a0a0a; --muted: #5a5a5a; --line: #0a0a0a; --line-soft: #e4e4e4;
+    --seeker: #ff4f00; --seeker-line: #0a0a0a; --on-seeker: #0a0a0a;
+    --hider: #0050ff; --zone: #ffd400; --zone-text: #0a0a0a;
+    --accent: #0a0a0a; --on-accent: #ffffff; --btn-line: #0a0a0a;
+    --radius: 4px; --avatar-radius: 2px; --border-w: 2px;
+    --shadow: none; --shadow-sm: none;
+    --font-body: "Archivo", sans-serif; --font-data: "Archivo", sans-serif;
+    --eyebrow-font: 700 10px "Archivo", sans-serif;
+    --code-font: 900 64px "Archivo", sans-serif; --code-color: #0a0a0a; --code-spacing: -0.01em;
+    --label-font: 800 13px "Archivo", sans-serif;
+    --btn-font: 900 17px "Archivo", sans-serif; --small-btn-font: 800 12px "Archivo", sans-serif;
+    --btn-spacing: 0.04em; --btn-case: uppercase;
+    --hud-font: 800 15px "Archivo", sans-serif; --clock-font: 900 28px "Archivo", sans-serif;
+    --m-block: #ebe8e1; --m-road: #ffffff; --m-road-edge: #c9c5bb; --m-park: #cfe2c1; --m-water: #b7d3ea;
+    --m-outside: rgba(10,10,10,.22); --boundary: #0a0a0a; --boundary-w: 3; --boundary-dash: 9 5;
+    --dot-ring: #ffffff; --m-halo: #ffffff;
+  }
+  .theme-field .code { font-stretch: 112%; }
+  .theme-field .clock .val, .theme-field .hud .val, .theme-field .btn { font-stretch: 110%; }
+  .theme-field .m-zone { fill-opacity: .35; stroke: #0a0a0a; }
+  .theme-field .m-label { font-size: 11px; font-weight: 800; }
+  .theme-field .hud > div, .theme-field .pingbar, .theme-field .actions button { backdrop-filter: none; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <h1>Manhunt: 3 style directions</h1>
+    <p>The same two screens, the lobby and a seeker mid-hunt, drawn in three different styles. Pick one, or mix them (e.g. "Night Ops colors with Field Kit's big text"). The maps here are hand-drawn stand-ins; the real game uses a live street map styled to match.</p>
+  </header>
+
+  <!-- 1 -->
+  <section class="direction">
+    <div class="info">
+      <div class="num">Direction 1</div>
+      <h2>Night Ops</h2>
+      <p class="pitch">A dark tactical HUD. Feels like a heist or a spy movie, with neon on near-black and a radar sweep on the map.</p>
+      <dl>
+        <div><dt>Feels like</dt><dd>Splinter Cell, a military radar, a hacker terminal</dd></div>
+        <div><dt>Best at</dt><dd>Atmosphere and tension, especially at dusk or night. Easy on battery with OLED screens.</dd></div>
+        <div><dt>Trade-off</dt><dd>Harder to read in bright midday sun. Can feel serious rather than fun.</dd></div>
+        <div><dt>Type</dt><dd>Chakra Petch (headings) + JetBrains Mono (numbers)</dd></div>
+      </dl>
+      <div class="swatches">
+        <span class="sw"><i style="background:#07090d"></i>Base</span>
+        <span class="sw"><i style="background:#ff3b4e"></i>Seeker</span>
+        <span class="sw"><i style="background:#3dff9a"></i>Hider</span>
+        <span class="sw"><i style="background:#ffb020"></i>Safe zone</span>
+      </div>
+    </div>
+    <div class="phones theme-ops" data-phones></div>
+  </section>
+
+  <!-- 2 -->
+  <section class="direction">
+    <div class="info">
+      <div class="num">Direction 2</div>
+      <h2>Playground</h2>
+      <p class="pitch">Bright, chunky and cartoony. Thick outlines, hard drop shadows and bouncy markers. A party game you play outside.</p>
+      <dl>
+        <div><dt>Feels like</dt><dd>Among Us, Fall Guys, Brawl Stars menus</dd></div>
+        <div><dt>Best at</dt><dd>Fun and friendliness. Big rounded buttons are easy to hit while running.</dd></div>
+        <div><dt>Trade-off</dt><dd>Less tension and suspense. Busier screens.</dd></div>
+        <div><dt>Type</dt><dd>Fredoka (everything)</dd></div>
+      </dl>
+      <div class="swatches">
+        <span class="sw"><i style="background:#fff3dc"></i>Base</span>
+        <span class="sw"><i style="background:#ff5a5f"></i>Seeker</span>
+        <span class="sw"><i style="background:#19c2b0"></i>Hider</span>
+        <span class="sw"><i style="background:#ffc23c"></i>Safe zone</span>
+        <span class="sw"><i style="background:#7b5cff"></i>Accent</span>
+      </div>
+    </div>
+    <div class="phones theme-play" data-phones></div>
+  </section>
+
+  <!-- 3 -->
+  <section class="direction">
+    <div class="info">
+      <div class="num">Direction 3</div>
+      <h2>Field Kit</h2>
+      <p class="pitch">High-contrast and bold, like sports gear or a hi-vis jacket. Black on white, huge numbers, safety orange and blue.</p>
+      <dl>
+        <div><dt>Feels like</dt><dd>Nike Run Club, Strava, transit signage</dd></div>
+        <div><dt>Best at</dt><dd>Readability. Built for glancing at your phone mid-sprint in full sunlight.</dd></div>
+        <div><dt>Trade-off</dt><dd>The plainest of the three. Less personality unless we add it in sound and animation.</dd></div>
+        <div><dt>Type</dt><dd>Archivo (wide, heavy weights)</dd></div>
+      </dl>
+      <div class="swatches">
+        <span class="sw"><i style="background:#ffffff"></i>Base</span>
+        <span class="sw"><i style="background:#ff4f00"></i>Seeker</span>
+        <span class="sw"><i style="background:#0050ff"></i>Hider</span>
+        <span class="sw"><i style="background:#ffd400"></i>Safe zone</span>
+      </div>
+    </div>
+    <div class="phones theme-field" data-phones></div>
+  </section>
+</div>
+
+<template id="phones-tpl">
+  <!-- Lobby -->
+  <div class="phone"><div class="screen lobby">
+    <div class="statusbar"><span>9:41</span><span>5G 87%</span></div>
+    <div class="lobby-head">
+      <div class="eyebrow">Room code</div>
+      <div class="code">KX4P</div>
+      <div class="sub">9 players · waiting for host</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Game settings <span class="chip">HOST</span></div>
+      <div class="row"><span>Mode</span><b>Classic</b></div>
+      <div class="row"><span>Seekers</span><b>2 · random</b></div>
+      <div class="row"><span>Head start</span><b>5:00</b></div>
+      <div class="row"><span>Ping every</span><b>60 s</b></div>
+      <div class="row"><span>Area</span><b>Circle · 150 m</b></div>
+    </div>
+    <div class="players">
+      <div class="player"><span class="avatar" style="--c:#7b5cff">M</span>Maya<span class="badge">host</span></div>
+      <div class="player"><span class="avatar" style="--c:#19c2b0">L</span>Leo</div>
+      <div class="player"><span class="avatar" style="--c:#ff5a5f">J</span>Jay</div>
+      <div class="player"><span class="avatar" style="--c:#ffb020">S</span>Sam</div>
+      <div class="player"><span class="avatar" style="--c:#3d8bff">A</span>Ava</div>
+      <div class="player"><span class="avatar" style="--c:#ff7ac6">N</span>Noah</div>
+      <div class="player"><span class="avatar" style="--c:#8bd450">Z</span>Zoe</div>
+      <div class="player"><span class="avatar" style="--c:#a0a0a0">+</span>2 more</div>
+    </div>
+    <button class="btn">Start game</button>
+  </div></div>
+
+  <!-- Hunt (seeker view) -->
+  <div class="phone"><div class="screen hunt">
+    <div class="statusbar"><span>9:58</span><span>5G 81%</span></div>
+    <div class="map">
+      <svg viewBox="0 0 300 620" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+        <rect class="m-bg" width="300" height="620" />
+        <path class="m-water" d="M-10 150 C 60 170, 120 120, 200 150 S 290 120, 320 140 L320 180 C 280 165, 230 195, 190 182 S 70 205, -10 190 Z" />
+        <g stroke-width="14" class="m-road-edge">
+          <path d="M-10 255 H310" /><path d="M-10 470 H310" /><path d="M70 -10 V630" /><path d="M235 -10 V630" />
+        </g>
+        <g stroke-width="11" class="m-road">
+          <path d="M-10 255 H310" /><path d="M-10 470 H310" /><path d="M70 -10 V630" /><path d="M235 -10 V630" />
+        </g>
+        <g stroke-width="5" class="m-road">
+          <path d="M-10 360 H70" /><path d="M235 360 H310" /><path d="M150 470 V630" /><path d="M150 -10 V255" />
+          <path d="M-10 560 H310" /><path d="M-10 90 H310" />
+        </g>
+        <rect class="m-park" x="82" y="267" width="141" height="191" rx="10" />
+        <ellipse class="m-water" cx="185" cy="400" rx="24" ry="15" />
+        <g stroke-width="2.5" class="m-road" stroke-dasharray="1 5">
+          <path d="M82 300 C 120 310, 140 340, 150 380 S 200 440, 223 445" />
+        </g>
+        <path class="m-outside" d="M0 0H300V620H0Z M25 340 a125 125 0 1 0 250 0 a125 125 0 1 0 -250 0Z" />
+        <circle class="m-boundary" cx="150" cy="340" r="125" />
+
+        <!-- safe zone -->
+        <circle class="m-zone" cx="215" cy="290" r="24" />
+        <text class="m-zone-label" x="215" y="294">2:14</text>
+
+        <!-- hider pings -->
+        <circle class="m-hider pulse" cx="62" cy="318" r="6" />
+        <circle class="m-hider" cx="62" cy="318" r="6" />
+        <text class="m-label" x="72" y="314">Maya</text>
+        <text class="m-label sub" x="72" y="325">38s ago</text>
+
+        <circle class="m-fuzzy" cx="168" cy="432" r="22" />
+        <text class="m-label" x="134" y="466">Leo</text>
+        <text class="m-label sub" x="160" y="466">± 25 m</text>
+
+        <g class="old">
+          <circle class="m-hider" cx="108" cy="400" r="5" />
+          <text class="m-label" x="116" y="397">Sam</text>
+          <text class="m-label sub" x="116" y="408">1m 38s</text>
+        </g>
+
+        <!-- seekers -->
+        <path class="m-cone" d="M140 330 L118 284 A 50 50 0 0 1 162 284 Z" />
+        <circle class="m-seeker" cx="140" cy="330" r="8" />
+        <text class="m-label" x="152" y="334">You</text>
+        <circle class="m-seeker" cx="230" cy="392" r="6" />
+        <text class="m-label" x="240" y="396">Jay</text>
+      </svg>
+      <div class="sweep"></div>
+      <div class="scan"></div>
+    </div>
+
+    <div class="hud">
+      <div class="role"><span class="label">Role</span><span class="val">Seeker</span></div>
+      <div class="clock"><span class="label">Time left</span><span class="val">23:41</span></div>
+      <div><span class="label">Hiders</span><span class="val">6/9</span></div>
+    </div>
+
+    <div class="bottom">
+      <div class="pingbar">
+        <div class="ring"></div>
+        <div><div class="label">Next ping</div><div class="val">0:42</div></div>
+        <div class="note">3 hiders pinged<br />1 in safe zone</div>
+      </div>
+      <div class="actions">
+        <button>Chat</button>
+        <button class="primary">Scan tag</button>
+        <button>Team</button>
+      </div>
+    </div>
+  </div></div>
+</template>
+
+<script>
+  const tpl = document.getElementById("phones-tpl");
+  document.querySelectorAll("[data-phones]").forEach((el) => el.appendChild(tpl.content.cloneNode(true)));
+</script>
+</body>
+</html>

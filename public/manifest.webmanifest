@@ -1,0 +1,12 @@
+{
+  "name": "Manhunt",
+  "short_name": "Manhunt",
+  "description": "IRL hide and seek with live location pings",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#07090d",
+  "theme_color": "#07090d",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
