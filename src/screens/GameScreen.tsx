@@ -3,7 +3,9 @@ import type { PlayerPublic, RoomView } from "../../shared/protocol";
 import MapView from "../components/MapView";
 import { TagCodeCard, TagScanner } from "../components/TagCode";
 import { Avatar, Sheet } from "../components/ui";
-import { buzz, formatClock, useWakeLock } from "../lib/hooks";
+import { buzz, formatClock } from "../lib/hooks";
+import { useCompass, useTrail } from "../lib/heading";
+import { useKeepAwake } from "../lib/keepAwake";
 import { useGps } from "../lib/location";
 import { buildPins } from "../lib/pins";
 import type { Room } from "../lib/useRoom";
@@ -13,7 +15,9 @@ const GPS_LOST_MS = 30_000;
 
 export default function GameScreen({ room, view, now, onLeave }: { room: Room; view: RoomView; now: number; onLeave: () => void }) {
   const gps = useGps();
-  const wakeLock = useWakeLock(true);
+  const keepAwake = useKeepAwake(true);
+  const compass = useCompass(true);
+  const { trail, heading: movingHeading } = useTrail(gps.pos);
   const s = view.settings;
   const me = view.me;
   const meP = view.players.find((p) => p.id === me.id);
@@ -109,6 +113,20 @@ export default function GameScreen({ room, view, now, onLeave }: { room: Room; v
       action: { label: "Simulate", run: () => gps.setSimulated(true) },
     });
   else if (meP?.stale) banners.push({ tone: "warn", text: "Your location isn't updating", sub: "Other players can see that" });
+  if (keepAwake.needsTap)
+    banners.push({
+      tone: "warn",
+      text: "Screen may turn off",
+      sub: "Tap to keep it on, so your location keeps sending",
+      action: { label: "Keep on", run: keepAwake.enable },
+    });
+  if (compass.status === "needs-permission")
+    banners.push({
+      tone: "none",
+      text: "Turn on your compass",
+      sub: "Shows which way you're facing",
+      action: { label: "Enable", run: () => (compass.request(), keepAwake.enable()) },
+    });
 
   const taggable = me.taggableBots.map((id) => view.players.find((p) => p.id === id)).filter(Boolean) as PlayerPublic[];
 
@@ -128,6 +146,10 @@ export default function GameScreen({ room, view, now, onLeave }: { room: Room; v
         fitKey="game"
         className="game-map"
         showRecenter
+        compass={compass.status === "on"}
+        heading={movingHeading}
+        // No compass: show your last few steps so you can still tell which way you're going.
+        trail={compass.status === "on" ? undefined : trail}
       />
       <div className="scanlines" aria-hidden="true" />
 
@@ -174,7 +196,7 @@ export default function GameScreen({ room, view, now, onLeave }: { room: Room; v
               {isSeeker && !headstart && `${pinned} hider${pinned === 1 ? "" : "s"} on map`}
               {isHider && view.nextSeekerPingAt && `Seekers shown in ${formatClock(view.nextSeekerPingAt - now)}`}
               {isHider && s.hiderView === "proximity" && "Nearby alert on"}
-              {!wakeLock && "wakeLock" in navigator && <span className="note-warn">Screen may sleep</span>}
+              {!keepAwake.awake && <span className="note-warn">Screen may sleep</span>}
             </div>
           </div>
         )}
@@ -293,7 +315,7 @@ export default function GameScreen({ room, view, now, onLeave }: { room: Room; v
 
       {sheet === "tagCode" && me.tagCode && (
         <Sheet title="Your tag code" onClose={() => setSheet(null)}>
-          <TagCodeCard code={me.tagCode} />
+          <TagCodeCard code={me.tagCode} refreshAt={me.tagCodeRefreshAt} now={now} />
         </Sheet>
       )}
 
@@ -320,7 +342,8 @@ export default function GameScreen({ room, view, now, onLeave }: { room: Room; v
                 setSheet(null);
               }}
             >
-              Tag {p.name}
+              {/* Anonymous mode: don't give away which bot is which. */}
+              Tag {s.anonymous ? `hider ${taggable.indexOf(p) + 1}` : p.name}
             </button>
           ))}
         </Sheet>

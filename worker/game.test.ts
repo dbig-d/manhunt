@@ -97,6 +97,76 @@ describe("visibility", () => {
   });
 });
 
+describe("anonymous mode and teammates", () => {
+  it("anonymous: seekers see hider pings without knowing who they are", () => {
+    const { game, host, h1, h2 } = setup({ anonymous: true });
+    run(game, T0, T0 + 60_000);
+    const ms = game.view(host.id, T0 + 60_000).markers;
+    expect(ms).toHaveLength(2);
+    for (const m of ms) {
+      expect(m.playerId).toBeNull();
+      expect(m.role).toBe("hider");
+      expect([h1.id, h2.id]).not.toContain(m.key);
+    }
+    // The throwaway id stays the same between pings so the pin doesn't jump around.
+    run(game, T0 + 60_000, T0 + 75_000);
+    expect(game.view(host.id, T0 + 75_000).markers.map((m) => m.key).sort()).toEqual(ms.map((m) => m.key).sort());
+  });
+
+  it("anonymous mode doesn't hide teammates or anyone from spectators", () => {
+    const { game, host, h1, h2 } = setup({ anonymous: true, hidersSeeHiders: "live" });
+    run(game, T0, T0 + 60_000);
+    expect(game.view(h1.id, T0 + 60_000).markers.map((m) => m.playerId)).toEqual([h2.id]);
+    game.tagSelf(h1.id, host.id, T0 + 61_000);
+    expect(game.view(h1.id, T0 + 61_000).markers.every((m) => m.playerId !== null)).toBe(true);
+  });
+
+  it("hiders can see other hiders live", () => {
+    const { game, h1, h2 } = setup({ hidersSeeHiders: "live" });
+    run(game, T0, T0 + 10_000);
+    const m = game.view(h1.id, T0 + 10_000).markers;
+    expect(m.map((x) => [x.playerId, x.kind])).toEqual([[h2.id, "live"]]);
+  });
+
+  it("hiders can see other hiders only at pings", () => {
+    const { game, h1, h2 } = setup({ hidersSeeHiders: "pings" });
+    run(game, T0, T0 + 30_000);
+    expect(game.view(h1.id, T0 + 30_000).markers).toEqual([]); // no ping yet during the head start
+    run(game, T0 + 30_000, T0 + 60_000);
+    const pingedAt = game.player(h2.id)!.pos!;
+    game.updateLocation(h2.id, offset(pingedAt, 40, 90), T0 + 61_000);
+    const m = game.view(h1.id, T0 + 61_000).markers;
+    expect(m.map((x) => x.kind)).toEqual(["ping"]);
+    expect(distance(m[0], pingedAt)).toBeLessThan(0.01);
+  });
+
+  it("seekers can be hidden from each other", () => {
+    let n = 0;
+    const game = Game.create("TEST", T0, seeded(), () => `id${n++}`);
+    const a = game.join("A", undefined, T0);
+    const b = game.join("B", undefined, T0);
+    const c = game.join("C", undefined, T0);
+    game.updateSettings(a.id, { boundary: { shape: "circle", center: CENTER, radius: 200 }, roleAssignment: "manual", seekersSeeSeekers: false });
+    game.setRole(a.id, a.id, "seeker");
+    game.setRole(a.id, b.id, "seeker");
+    game.setRole(a.id, c.id, "hider");
+    for (const p of [a, b, c]) game.updateLocation(p.id, CENTER, T0);
+    game.start(a.id, T0);
+    expect(game.view(a.id, T0).markers).toEqual([]);
+  });
+
+  it("old saved rooms with the 'teammates' setting still load", () => {
+    const { game } = setup();
+    const saved = JSON.parse(JSON.stringify(game.state));
+    delete saved.settings.seekersSeeSeekers;
+    delete saved.settings.hidersSeeHiders;
+    saved.settings.teammates = "both";
+    const loaded = new Game(saved);
+    expect(loaded.state.settings.seekersSeeSeekers).toBe(true);
+    expect(loaded.state.settings.hidersSeeHiders).toBe("live");
+  });
+});
+
 describe("tagging and winning", () => {
   it("classic: a tagged hider is out and can spectate everyone", () => {
     const { game, host, h1, h2 } = setup();
@@ -135,8 +205,10 @@ describe("tagging and winning", () => {
   it("QR tagging: a seeker tags with the hider's current code", () => {
     const { game, host, h1 } = setup({ tagMode: "qr" });
     run(game, T0, T0 + 60_000);
-    const code = game.view(h1.id, T0 + 60_000).me.tagCode!;
+    const me = game.view(h1.id, T0 + 60_000).me;
+    const code = me.tagCode!;
     expect(code).toMatch(/^\d{4}$/);
+    expect(me.tagCodeRefreshAt).toBe(T0 + 60_000 + 20_000);
     expect(() => game.tagWithCode(host.id, "nope", T0 + 61_000)).toThrow(GameError);
     game.tagWithCode(host.id, code, T0 + 61_000);
     expect(game.player(h1.id)!.status).toBe("out");

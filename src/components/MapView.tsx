@@ -8,6 +8,7 @@ import type * as GeoJSON from "geojson";
 import type { Boundary, LatLng, Marker, Role } from "../../shared/protocol";
 import { boundaryRing, circleRing } from "../../shared/geo";
 import { DEFAULT_CENTER } from "../lib/location";
+import { compassStore } from "../lib/heading";
 
 setWorkerUrl(mapWorkerUrl);
 
@@ -37,7 +38,15 @@ interface Props {
   fitKey?: string;
   className?: string;
   showRecenter?: boolean;
+  /** Your recent positions, drawn as a fading line. */
+  trail?: LatLng[];
+  /** Direction you're facing (degrees from north), shown as a cone. */
+  heading?: number | null;
+  /** Use the live compass for the cone instead of `heading`. */
+  compass?: boolean;
 }
+
+const ROLE_COLOR: Record<string, string> = { seeker: "255,59,78", hider: "61,255,154", none: "217,228,240" };
 
 const coords = (ring: LatLng[]) => ring.map((p) => [p.lng, p.lat]);
 const WORLD = [[-180, -85], [180, -85], [180, 85], [-180, 85], [-180, -85]];
@@ -80,7 +89,7 @@ function recolor(map: MlMap) {
   }
 }
 
-export default function MapView({ boundary, pins, me, onMapClick, fitKey, className, showRecenter }: Props) {
+export default function MapView({ boundary, pins, me, onMapClick, fitKey, className, showRecenter, trail, heading, compass }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
   const markers = useRef(new Map<string, MlMarker>());
@@ -116,6 +125,7 @@ export default function MapView({ boundary, pins, me, onMapClick, fitKey, classN
       map.addSource("mh-boundary", { type: "geojson", data: empty });
       map.addSource("mh-fuzzy", { type: "geojson", data: empty });
       map.addSource("mh-accuracy", { type: "geojson", data: empty });
+      map.addSource("mh-trail", { type: "geojson", data: empty, lineMetrics: true });
       map.addLayer({ id: "mh-outside", type: "fill", source: "mh-outside", paint: { "fill-color": "#000", "fill-opacity": 0.55 } });
       map.addLayer({
         id: "mh-boundary",
@@ -124,6 +134,13 @@ export default function MapView({ boundary, pins, me, onMapClick, fitKey, classN
         paint: { "line-color": "#3dff9a", "line-width": 2, "line-dasharray": [3, 2], "line-opacity": 0.9 },
       });
       map.addLayer({ id: "mh-accuracy", type: "fill", source: "mh-accuracy", paint: { "fill-color": "#d9e4f0", "fill-opacity": 0.06 } });
+      map.addLayer({
+        id: "mh-trail",
+        type: "line",
+        source: "mh-trail",
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: { "line-width": 4 },
+      });
       map.addLayer({ id: "mh-fuzzy-fill", type: "fill", source: "mh-fuzzy", paint: { "fill-color": "#3dff9a", "fill-opacity": ["get", "opacity"] } });
       map.addLayer({
         id: "mh-fuzzy-line",
@@ -212,14 +229,63 @@ export default function MapView({ boundary, pins, me, onMapClick, fitKey, classN
     }
     if (!meMarker.current) {
       const el = document.createElement("div");
-      el.innerHTML = `<div class="pin-me"><span></span></div>`;
-      meMarker.current = new MlMarker({ element: el, anchor: "center" }).setLngLat([me.pos.lng, me.pos.lat]).addTo(map);
+      el.innerHTML = `<div class="pin-me"><div class="pin-me-cone"></div><span></span></div>`;
+      // "map" alignment: the cone keeps pointing the right way when the map is rotated.
+      meMarker.current = new MlMarker({ element: el, anchor: "center", rotationAlignment: "map" })
+        .setLngLat([me.pos.lng, me.pos.lat])
+        .addTo(map);
     }
-    (meMarker.current.getElement().firstElementChild as HTMLElement).className = `pin-me pin-me--${me.role ?? "none"}`;
+    const inner = meMarker.current.getElement().firstElementChild as HTMLElement;
+    inner.classList.remove("pin-me--seeker", "pin-me--hider", "pin-me--none");
+    inner.classList.add(`pin-me--${me.role ?? "none"}`);
     meMarker.current.setLngLat([me.pos.lng, me.pos.lat]);
     const acc = me.accuracy && me.accuracy > 8 ? [polygon([coords(circleRing(me.pos, Math.min(me.accuracy, 200)))])] : [];
     (map.getSource("mh-accuracy") as GeoJSONSource).setData(featureCollection(acc));
   }, [me, loaded]);
+
+  // Facing cone: live compass when there is one, otherwise the direction you've been moving.
+  const meReady = !!me && loaded;
+  useEffect(() => {
+    const marker = meMarker.current;
+    if (!meReady || !marker) return;
+    const inner = marker.getElement().firstElementChild as HTMLElement;
+    const show = (h: number | null) => {
+      inner.classList.toggle("has-heading", h !== null);
+      if (h !== null) marker.setRotation(h);
+    };
+    if (!compass) {
+      show(heading ?? null);
+      return;
+    }
+    let frame = 0;
+    show(compassStore.get());
+    const unsub = compassStore.subscribe((h) => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => show(h));
+    });
+    return () => {
+      unsub();
+      cancelAnimationFrame(frame);
+    };
+  }, [meReady, compass, heading]);
+
+  // Trail of your last few steps, fading out behind you.
+  const trailRole = me?.role ?? "none";
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !loaded) return;
+    const line: GeoJSON.Feature[] =
+      trail && trail.length > 1
+        ? [{ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: coords(trail) } }]
+        : [];
+    (map.getSource("mh-trail") as GeoJSONSource).setData(featureCollection(line));
+  }, [trail, loaded]);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !loaded) return;
+    const rgb = ROLE_COLOR[trailRole];
+    map.setPaintProperty("mh-trail", "line-gradient", ["interpolate", ["linear"], ["line-progress"], 0, `rgba(${rgb},0)`, 1, `rgba(${rgb},0.7)`]);
+  }, [trailRole, loaded]);
 
   return (
     <div className={`map ${className ?? ""}`}>

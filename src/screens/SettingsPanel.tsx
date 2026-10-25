@@ -162,17 +162,23 @@ export default function SettingsPanel({
           </Row>
         )}
         {s.hiderView === "proximity" && <p className="setting-hint">Hiders get an alert when a seeker is within 50 m.</p>}
-        <Row label="Teammates visible live">
+        <Row label="Hiders see other hiders">
           <Segmented
-            value={s.teammates}
+            value={s.hidersSeeHiders}
             disabled={off}
-            onChange={(teammates) => onChange({ teammates })}
+            onChange={(hidersSeeHiders) => onChange({ hidersSeeHiders })}
             options={[
-              { value: "seekers", label: "Seekers" },
-              { value: "both", label: "Both teams" },
-              { value: "none", label: "Nobody" },
+              { value: "live", label: "Live" },
+              { value: "pings", label: "At pings" },
+              { value: "none", label: "Never" },
             ]}
           />
+        </Row>
+        <Row label="Seekers see each other live">
+          <Toggle value={s.seekersSeeSeekers} disabled={off} onChange={(seekersSeeSeekers) => onChange({ seekersSeeSeekers })} />
+        </Row>
+        <Row label="Anonymous" hint="The other team's dots have no names, so you don't know who you're chasing">
+          <Toggle value={s.anonymous} disabled={off} onChange={(anonymous) => onChange({ anonymous })} />
         </Row>
       </Section>
 

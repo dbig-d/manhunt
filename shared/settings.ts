@@ -11,7 +11,9 @@ export const DEFAULT_SETTINGS: Settings = {
   pingStyle: "exact",
   hiderView: "none",
   hiderViewIntervalSec: 180,
-  teammates: "seekers",
+  seekersSeeSeekers: true,
+  hidersSeeHiders: "none",
+  anonymous: false,
   boundary: null,
   oobPenalty: "reveal",
   oobGraceSec: 15,
@@ -102,7 +104,11 @@ export function applySettingsPatch(current: Settings, patch: Partial<Settings>):
     hiderViewIntervalSec: has("hiderViewIntervalSec")
       ? clamp(p.hiderViewIntervalSec, LIMITS.hiderViewIntervalSec, current.hiderViewIntervalSec)
       : current.hiderViewIntervalSec,
-    teammates: has("teammates") ? oneOf(p.teammates, ["seekers", "both", "none"], current.teammates) : current.teammates,
+    seekersSeeSeekers: has("seekersSeeSeekers") ? p.seekersSeeSeekers === true : current.seekersSeeSeekers,
+    hidersSeeHiders: has("hidersSeeHiders")
+      ? oneOf(p.hidersSeeHiders, ["live", "pings", "none"], current.hidersSeeHiders)
+      : current.hidersSeeHiders,
+    anonymous: has("anonymous") ? p.anonymous === true : current.anonymous,
     boundary: has("boundary") ? sanitizeBoundary(p.boundary, current.boundary) : current.boundary,
     oobPenalty: has("oobPenalty") ? oneOf(p.oobPenalty, ["warn", "reveal", "eliminate"], current.oobPenalty) : current.oobPenalty,
     oobGraceSec: has("oobGraceSec") ? clamp(p.oobGraceSec, LIMITS.oobGraceSec, current.oobGraceSec) : current.oobGraceSec,

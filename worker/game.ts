@@ -32,6 +32,8 @@ import { bearing, distance, insideBoundary, offset, randomPointInBoundary } from
 export interface PlayerState {
   id: string;
   token: string;
+  /** Random id shown instead of the real one on anonymous pins; new every game. */
+  alias: string;
   name: string;
   isBot: boolean;
   connected: boolean;
@@ -96,7 +98,17 @@ export class Game {
     public state: GameState,
     private rand: () => number = Math.random,
     private makeId: () => string = () => crypto.randomUUID(),
-  ) {}
+  ) {
+    // Rooms saved by an older version may be missing newer fields.
+    const legacy = state.settings as Settings & { teammates?: "seekers" | "both" | "none" };
+    state.settings = { ...DEFAULT_SETTINGS, ...state.settings };
+    if (legacy.teammates) {
+      state.settings.seekersSeeSeekers = legacy.teammates !== "none";
+      state.settings.hidersSeeHiders = legacy.teammates === "both" ? "live" : "none";
+      delete (state.settings as { teammates?: unknown }).teammates;
+    }
+    for (const p of state.players) p.alias ??= this.makeId();
+  }
 
   static create(code: string, now: number, rand?: () => number, makeId?: () => string): Game {
     return new Game(
@@ -207,6 +219,7 @@ export class Game {
     return {
       id: this.makeId(),
       token: this.makeId(),
+      alias: this.makeId(),
       name,
       isBot,
       connected: !isBot,
@@ -391,6 +404,7 @@ export class Game {
 
     for (const p of players) {
       p.startRole = p.role;
+      p.alias = this.makeId();
       p.status = "alive";
       p.ping = null;
       p.seekerPing = null;
@@ -750,31 +764,44 @@ export class Game {
     const markers: Marker[] = [];
     for (const p of st.players) {
       if (p.id === me.id || !p.pos) continue;
-      const live: Marker = { playerId: p.id, lat: p.pos.lat, lng: p.pos.lng, kind: "live", at: p.posAt ?? now };
+      const named = { key: p.id, playerId: p.id, role: p.role };
 
       if (spectating) {
-        if (!this.active || p.status === "alive") markers.push(live);
+        if (!this.active || p.status === "alive") {
+          markers.push({ ...named, lat: p.pos.lat, lng: p.pos.lng, kind: "live", at: p.posAt ?? now });
+        }
         continue;
       }
       if (p.status !== "alive" || !p.role) continue;
+
+      const teammate = p.role === me.role;
+      // Anonymous mode: the other team's pins carry a throwaway id instead of who they are.
+      const who = !teammate && s.anonymous ? { key: p.alias, playerId: null, role: p.role } : named;
+      const live: Marker = { ...who, lat: p.pos.lat, lng: p.pos.lng, kind: "live", at: p.posAt ?? now };
 
       if (p.revealed) {
         markers.push(live);
       } else if (s.stalePenalty === "reveal" && this.isStale(p, now)) {
         markers.push({ ...live, kind: "lastKnown" });
-      } else if (p.role === me.role) {
-        if (s.teammates === "both" || (s.teammates === "seekers" && me.role === "seeker")) markers.push(live);
+      } else if (teammate) {
+        if (me.role === "seeker") {
+          if (s.seekersSeeSeekers) markers.push(live);
+        } else if (s.hidersSeeHiders === "live") {
+          markers.push(live);
+        } else if (s.hidersSeeHiders === "pings" && st.phase === "hunt" && p.ping) {
+          markers.push({ ...who, lat: p.ping.pos.lat, lng: p.ping.pos.lng, kind: "ping", at: p.ping.at });
+        }
       } else if (me.role === "seeker") {
         if (st.phase === "hunt" && p.ping) {
           const c = p.ping.fuzzCenter;
           markers.push(
             c
-              ? { playerId: p.id, lat: c.lat, lng: c.lng, kind: "fuzzy", radius: FUZZY_RADIUS_M, at: p.ping.at }
-              : { playerId: p.id, lat: p.ping.pos.lat, lng: p.ping.pos.lng, kind: "ping", at: p.ping.at },
+              ? { ...who, lat: c.lat, lng: c.lng, kind: "fuzzy", radius: FUZZY_RADIUS_M, at: p.ping.at }
+              : { ...who, lat: p.ping.pos.lat, lng: p.ping.pos.lng, kind: "ping", at: p.ping.at },
           );
         }
       } else if (s.hiderView === "pinged" && p.seekerPing) {
-        markers.push({ playerId: p.id, lat: p.seekerPing.pos.lat, lng: p.seekerPing.pos.lng, kind: "ping", at: p.seekerPing.at });
+        markers.push({ ...who, lat: p.seekerPing.pos.lat, lng: p.seekerPing.pos.lng, kind: "ping", at: p.seekerPing.at });
       }
     }
 
@@ -807,6 +834,7 @@ export class Game {
               }
             : null,
         tagCode: hunting && aliveHider && s.tagMode === "qr" ? me.tagCode : null,
+        tagCodeRefreshAt: hunting && aliveHider && s.tagMode === "qr" ? st.nextTagCodeAt : null,
         proximityAlert: seekersNearby,
         taggableBots:
           hunting && aliveSeeker && me.pos

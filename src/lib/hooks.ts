@@ -10,35 +10,6 @@ export function useNow(serverNow: () => number, everyMs = 250) {
   return now;
 }
 
-/** Keeps the screen on while active, so the phone keeps sending its location. */
-export function useWakeLock(active: boolean) {
-  const [held, setHeld] = useState(false);
-  useEffect(() => {
-    if (!active || !("wakeLock" in navigator)) return;
-    let lock: WakeLockSentinel | null = null;
-    let cancelled = false;
-    const acquire = async () => {
-      try {
-        lock = await navigator.wakeLock.request("screen");
-        if (cancelled) return void lock.release();
-        setHeld(true);
-        lock.addEventListener("release", () => setHeld(false));
-      } catch {
-        setHeld(false);
-      }
-    };
-    const onVisible = () => document.visibilityState === "visible" && acquire();
-    acquire();
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      cancelled = true;
-      document.removeEventListener("visibilitychange", onVisible);
-      lock?.release();
-    };
-  }, [active]);
-  return held;
-}
-
 export function formatClock(ms: number) {
   const total = Math.max(0, Math.ceil(ms / 1000));
   const m = Math.floor(total / 60);

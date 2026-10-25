@@ -7,11 +7,14 @@ export function buildPins(view: RoomView, now: number): MapPin[] {
   const byId = new Map(view.players.map((p) => [p.id, p]));
   const fadeOver = view.settings.pingIntervalSec * 1000 * 1.5;
   return view.markers.map((m) => {
-    const p = byId.get(m.playerId);
+    const p = m.playerId ? byId.get(m.playerId) : undefined;
+    // Anonymous pins only say which team they're on.
+    const label = p?.name ?? (m.role === "seeker" ? "Seeker" : "Hider");
     const ageMs = now - m.at;
     const sub =
       m.kind === "live"
-        ? p?.revealed
+        ? // The other team only ever shows up live when they've been revealed.
+          p?.revealed || (!p && m.role !== view.me.role)
           ? "out of bounds"
           : undefined
         : m.kind === "lastKnown"
@@ -20,12 +23,12 @@ export function buildPins(view: RoomView, now: number): MapPin[] {
             ? `±${m.radius} m · ${formatAgo(ageMs)}`
             : formatAgo(ageMs);
     return {
-      id: m.playerId,
+      id: m.key,
       lat: m.lat,
       lng: m.lng,
-      label: p?.name ?? "?",
+      label,
       sub,
-      role: p?.role ?? null,
+      role: m.role,
       kind: m.kind,
       radius: m.radius,
       age: m.kind === "live" ? 0 : Math.min(1, ageMs / fadeOver),

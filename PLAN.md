@@ -219,7 +219,17 @@ Visual style: **Night Ops** (dark tactical). Testing aids added in this phase: b
 
 ---
 
-## 10. Still open (decide later)
+## 10. Location while the app is in the background
+
+A website can't get the phone's location while another app is open or the screen is off. iPhones and Android both stop sending location updates to a page as soon as it's not on screen. What the website does instead:
+- Keeps the screen on during games (Wake Lock API, with a silent-video fallback for older iPhones)
+- Flags or reveals players whose location goes quiet (the stale-location setting)
+
+Real background location needs a native app, e.g. wrapping this website with Capacitor plus a background-location plugin:
+- **Android:** an installable app (APK) can be built for free, even from GitHub Actions.
+- **iPhone:** needs a Mac to build and an Apple Developer account ($99/year) to install on phones beyond short-lived test installs.
+
+## 11. Still open (decide later)
 - Exact default numbers after the first playtest (ping interval, zone rates, prices)
 - Which visual direction to use (Phase 0)
 - Final name/branding and domain (a free `*.workers.dev` address works to start)

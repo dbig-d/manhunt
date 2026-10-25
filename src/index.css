@@ -418,8 +418,25 @@ input:focus { border-color: var(--hider); box-shadow: 0 0 0 3px rgba(61, 255, 15
 .pin-label small { font-size: 9px; color: var(--muted); }
 .pin-label small:empty { display: none; }
 
-.pin-me { width: 20px; height: 20px; pointer-events: none; }
+.pin-me { position: relative; width: 20px; height: 20px; pointer-events: none; }
+/* Facing cone: points up (north) and the marker itself is rotated to your heading. */
+.pin-me-cone {
+  position: absolute;
+  left: 50%;
+  bottom: 50%;
+  width: 64px;
+  height: 58px;
+  transform: translateX(-50%);
+  clip-path: polygon(50% 100%, 0 0, 100% 0);
+  background: linear-gradient(to top, rgba(217, 228, 240, 0.55), rgba(217, 228, 240, 0));
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+.pin-me--seeker .pin-me-cone { background: linear-gradient(to top, rgba(255, 59, 78, 0.6), rgba(255, 59, 78, 0)); }
+.pin-me--hider .pin-me-cone { background: linear-gradient(to top, rgba(61, 255, 154, 0.55), rgba(61, 255, 154, 0)); }
+.pin-me.has-heading .pin-me-cone { opacity: 1; }
 .pin-me span {
+  position: relative;
   display: block;
   width: 100%;
   height: 100%;
@@ -586,10 +603,108 @@ input:focus { border-color: var(--hider); box-shadow: 0 0 0 3px rgba(61, 255, 15
 
 /* QR tagging */
 .tagcode { display: grid; justify-items: center; gap: 10px; text-align: center; }
-.tagcode img { border-radius: 8px; box-shadow: var(--glow-hider); }
+.tagcode-qr {
+  appearance: none;
+  padding: 0;
+  border: 0;
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: var(--glow-hider);
+  cursor: zoom-in;
+  width: min(78vw, 320px);
+}
+.tagcode-qr img, .tagcode-full img { display: block; width: 100%; height: auto; image-rendering: pixelated; border-radius: 10px; }
 .tagcode-digits { font: 700 44px var(--font-data); letter-spacing: 0.3em; color: var(--hider); padding-left: 0.3em; }
+.tagcode-timer { position: relative; width: min(78vw, 320px); height: 22px; border-radius: 6px; background: var(--line-soft); overflow: hidden; }
+.tagcode-bar { position: absolute; inset: 0 auto 0 0; background: rgba(61, 255, 154, 0.35); transition: width 0.25s linear; }
+.tagcode-timer span { position: relative; font: 500 11px/22px var(--font-data); color: var(--ink); }
+.tagcode-full {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  appearance: none;
+  border: 0;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 16px;
+  cursor: zoom-out;
+}
+.tagcode-full img { width: min(94vw, 94vh - 140px); }
+.tagcode-full-digits { font: 700 56px var(--font-data); letter-spacing: 0.3em; color: #000; padding-left: 0.3em; }
+.tagcode-full small { font: 500 13px var(--font-data); color: #555; }
+
 .scanner { display: grid; gap: 12px; }
-.scanner-video { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); background: #000; }
+.scanner-view {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #000;
+  touch-action: none; /* pinch zooms the camera, not the page */
+}
+.scanner-video { width: 100%; height: 100%; object-fit: cover; transform-origin: center; transition: transform 0.1s; }
+.scanner-frame {
+  position: absolute;
+  inset: 14%;
+  border-radius: 10px;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--seeker), var(--seeker)) top left / 28px 4px,
+    linear-gradient(var(--seeker), var(--seeker)) top left / 4px 28px,
+    linear-gradient(var(--seeker), var(--seeker)) top right / 28px 4px,
+    linear-gradient(var(--seeker), var(--seeker)) top right / 4px 28px,
+    linear-gradient(var(--seeker), var(--seeker)) bottom left / 28px 4px,
+    linear-gradient(var(--seeker), var(--seeker)) bottom left / 4px 28px,
+    linear-gradient(var(--seeker), var(--seeker)) bottom right / 28px 4px,
+    linear-gradient(var(--seeker), var(--seeker)) bottom right / 4px 28px;
+  background-repeat: no-repeat;
+  box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.35);
+}
+.scanner-view--found .scanner-frame { box-shadow: 0 0 0 999px rgba(61, 255, 154, 0.35); }
+.scanner-status {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.7);
+  font: 500 12px var(--font-data);
+}
+.scanner-status--found { color: var(--hider); font-weight: 700; }
+.scanner-torch {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.6);
+  color: var(--muted);
+  font-size: 20px;
+}
+.scanner-torch.on { color: var(--zone); border-color: var(--zone); }
+.scanner-zoom { display: grid; gap: 6px; }
+.scanner-zoom input { width: 100%; accent-color: var(--seeker); }
+.scanner-zoom-presets { display: flex; gap: 6px; justify-content: center; }
+.scanner-zoom-presets button {
+  appearance: none;
+  min-width: 48px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  font: 700 12px var(--font-data);
+  cursor: pointer;
+}
+.scanner-zoom-presets button.on { border-color: var(--seeker); color: var(--seeker); }
 
 /* ============ Sheets & toasts ============ */
 .sheet-backdrop {

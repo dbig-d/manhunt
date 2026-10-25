@@ -28,8 +28,12 @@ export interface Settings {
   /** What hiders get to know about seekers. */
   hiderView: "none" | "pinged" | "proximity";
   hiderViewIntervalSec: number;
-  /** Who sees their own teammates live. */
-  teammates: "seekers" | "both" | "none";
+  /** Seekers see each other live. */
+  seekersSeeSeekers: boolean;
+  /** How hiders see other hiders: live, only at each ping, or not at all. */
+  hidersSeeHiders: "live" | "pings" | "none";
+  /** Pins of the other team show no names, so you don't know who you're chasing. */
+  anonymous: boolean;
   boundary: Boundary | null;
   oobPenalty: "warn" | "reveal" | "eliminate";
   oobGraceSec: number;
@@ -56,7 +60,11 @@ export interface PlayerPublic {
 }
 
 export interface Marker {
-  playerId: string;
+  /** Stable id for drawing the pin. Not the player id when the pin is anonymous. */
+  key: string;
+  /** Null when anonymous mode hides who this is. */
+  playerId: string | null;
+  role: Role | null;
   lat: number;
   lng: number;
   /**
@@ -78,6 +86,8 @@ export interface MeView {
   oob: { since: number; penaltyAt: number | null } | null;
   /** Hiders in QR mode: the code a seeker scans to tag you. */
   tagCode: string | null;
+  /** When tagCode changes next (server time). */
+  tagCodeRefreshAt: number | null;
   /** Hiders with the proximity setting: a seeker is close. */
   proximityAlert: boolean;
   /** Seekers: bot hiders close enough to tag. */
