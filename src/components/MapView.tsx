@@ -10,12 +10,79 @@ import { boundaryRing, circleRing } from "../../shared/geo";
 import { DEFAULT_CENTER } from "../lib/location";
 import { compassStore } from "../lib/heading";
 import { formatClock } from "../lib/hooks";
+import { accentHex, useTheme, type Theme, type ThemeMode } from "../lib/theme";
 import Icon from "./Icon";
 
 setWorkerUrl(mapWorkerUrl);
 
-// Free street map tiles (OpenStreetMap data), recolored to the Night Ops palette below.
-const STYLE_URL = "https://tiles.openfreemap.org/styles/dark";
+// Free street map tiles (OpenStreetMap data), recolored per theme below.
+const STYLE_URL: Record<ThemeMode, string> = {
+  dark: "https://tiles.openfreemap.org/styles/dark",
+  gray: "https://tiles.openfreemap.org/styles/dark",
+  light: "https://tiles.openfreemap.org/styles/positron",
+};
+
+/** Map colors for each theme (the base map, and our overlays drawn on top of it). */
+const MAP_THEME: Record<ThemeMode, {
+  base: Record<string, string>;
+  label: string;
+  halo: string;
+  outside: [string, number];
+  hider: string;
+  seeker: string;
+  zone: string;
+  accuracy: string;
+  roleRgb: Record<string, string>;
+}> = {
+  dark: {
+    base: {
+      background: "#05070b", water: "#0a1624", waterway: "#0a1624", landuse_residential: "#090d14", landcover_wood: "#0c1d16",
+      landuse_park: "#0d2119", park: "#0d2119", building: "#131c2a", highway_path: "#243d33", highway_minor: "#223047",
+      highway_major_casing: "#33476a", highway_major_inner: "#26354f", highway_major_subtle: "#26354f",
+      highway_motorway_casing: "#33476a", highway_motorway_subtle: "#26354f",
+    },
+    label: "#5d6f84",
+    halo: "#05070b",
+    outside: ["#000000", 0.55],
+    hider: "#3dff9a",
+    seeker: "#ff3b4e",
+    zone: "#ffb020",
+    accuracy: "#d9e4f0",
+    roleRgb: { seeker: "255,59,78", hider: "61,255,154", none: "230,238,247" },
+  },
+  gray: {
+    base: {
+      background: "#1c2026", water: "#1a2531", waterway: "#1a2531", landuse_residential: "#1f2329", landcover_wood: "#1f2a25",
+      landuse_park: "#213029", park: "#213029", building: "#2b3139", highway_path: "#3a4a42", highway_minor: "#363d47",
+      highway_major_casing: "#4b5563", highway_major_inner: "#3d4551", highway_major_subtle: "#3d4551",
+      highway_motorway_casing: "#4b5563", highway_motorway_subtle: "#3d4551",
+    },
+    label: "#8a94a0",
+    halo: "#1c2026",
+    outside: ["#000000", 0.42],
+    hider: "#3dff9a",
+    seeker: "#ff3b4e",
+    zone: "#ffb020",
+    accuracy: "#e6eaf0",
+    roleRgb: { seeker: "255,59,78", hider: "61,255,154", none: "238,241,245" },
+  },
+  light: {
+    base: {
+      background: "#eef1f5", water: "#c6d8ea", waterway: "#c6d8ea", landuse_residential: "#e6e9ee", landcover_wood: "#d9e8d6",
+      landuse_park: "#d6e9d6", park: "#d6e9d6", building: "#dbe0e7", highway_path: "#d3dfd7", highway_minor: "#ffffff",
+      highway_major_casing: "#c8d0da", highway_major_inner: "#ffffff", highway_major_subtle: "#ffffff",
+      highway_motorway_casing: "#c8d0da", highway_motorway_subtle: "#ffffff",
+    },
+    label: "#6b7787",
+    halo: "#ffffff",
+    outside: ["#1b2430", 0.22],
+    hider: "#10a85f",
+    seeker: "#e0313f",
+    zone: "#d98a00",
+    accuracy: "#0f1722",
+    roleRgb: { seeker: "224,49,63", hider: "16,168,95", none: "15,23,34" },
+  },
+};
 
 export interface MapPin {
   id: string;
@@ -73,7 +140,6 @@ interface Props {
   night?: boolean;
 }
 
-const ROLE_COLOR: Record<string, string> = { seeker: "255,59,78", hider: "61,255,154", none: "230,238,247" };
 const coords = (ring: LatLng[]) => ring.map((p) => [p.lng, p.lat]);
 const WORLD = [[-180, -85], [180, -85], [180, 85], [-180, 85], [-180, -85]];
 
@@ -87,30 +153,18 @@ function lineString(points: LatLng[], properties: GeoJSON.GeoJsonProperties = {}
   return { type: "Feature", properties, geometry: { type: "LineString", coordinates: coords(points) } };
 }
 
-/** Tint the stock dark map toward the Night Ops blue-black. */
-function recolor(map: MlMap) {
-  const paint: Record<string, [Parameters<MlMap["setPaintProperty"]>[1], string][]> = {
-    background: [["background-color", "#05070b"]],
-    water: [["fill-color", "#0a1624"]],
-    waterway: [["line-color", "#0a1624"]],
-    landuse_residential: [["fill-color", "#090d14"]],
-    landcover_wood: [["fill-color", "#0c1d16"]],
-    landuse_park: [["fill-color", "#0d2119"]],
-    building: [["fill-color", "#131c2a"]],
-    highway_path: [["line-color", "#243d33"]],
-    highway_minor: [["line-color", "#223047"]],
-    highway_major_casing: [["line-color", "#33476a"]],
-    highway_major_inner: [["line-color", "#26354f"]],
-    highway_major_subtle: [["line-color", "#26354f"]],
-    highway_motorway_casing: [["line-color", "#33476a"]],
-    highway_motorway_subtle: [["line-color", "#26354f"]],
-  };
+/** Tint the stock map to match the app's theme. */
+function recolor(map: MlMap, mode: ThemeMode) {
+  const t = MAP_THEME[mode];
+  const prop = { background: "background-color", fill: "fill-color", line: "line-color" } as const;
   for (const layer of map.getStyle().layers ?? []) {
     try {
-      for (const [prop, value] of paint[layer.id] ?? []) map.setPaintProperty(layer.id, prop, value);
+      const color = t.base[layer.id];
+      const p = prop[layer.type as keyof typeof prop];
+      if (color && p) map.setPaintProperty(layer.id, p, color);
       if (layer.type === "symbol") {
-        map.setPaintProperty(layer.id, "text-color", "#5d6f84");
-        map.setPaintProperty(layer.id, "text-halo-color", "#05070b");
+        map.setPaintProperty(layer.id, "text-color", t.label);
+        map.setPaintProperty(layer.id, "text-halo-color", t.halo);
       }
     } catch {
       // layer without that property; skip
@@ -167,7 +221,10 @@ function MapView({
   lines,
   dots,
   night,
-}: Props) {
+  theme,
+}: Props & { theme: Theme }) {
+  const palette = MAP_THEME[theme.mode];
+  const accent = accentHex(theme);
   const container = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
   const pinMarkers = useRef(new Map<string, MlMarker>());
@@ -184,7 +241,7 @@ function MapView({
     const start = initial.current.boundary?.center ?? initial.current.me?.pos ?? DEFAULT_CENTER;
     const map = new MlMap({
       container: container.current!,
-      style: STYLE_URL,
+      style: STYLE_URL[theme.mode],
       center: [start.lng, start.lat],
       zoom: 16,
       attributionControl: { compact: true },
@@ -202,18 +259,18 @@ function MapView({
     });
     // "style.load" fires as soon as the style is ready, without waiting for every tile.
     map.once("style.load", () => {
-      recolor(map);
+      recolor(map, theme.mode);
       const empty = featureCollection([]);
       for (const id of ["mh-outside", "mh-boundary", "mh-storm", "mh-zones", "mh-lines", "mh-fuzzy", "mh-accuracy"]) {
         map.addSource(id, { type: "geojson", data: empty });
       }
       map.addSource("mh-trail", { type: "geojson", data: empty, lineMetrics: true });
-      map.addLayer({ id: "mh-outside", type: "fill", source: "mh-outside", paint: { "fill-color": "#000", "fill-opacity": 0.55 } });
+      map.addLayer({ id: "mh-outside", type: "fill", source: "mh-outside", paint: { "fill-color": palette.outside[0], "fill-opacity": palette.outside[1] } });
       map.addLayer({
         id: "mh-storm",
         type: "line",
         source: "mh-storm",
-        paint: { "line-color": "#ff3b4e", "line-width": 1.5, "line-dasharray": [1, 2], "line-opacity": 0.7 },
+        paint: { "line-color": palette.seeker, "line-width": 1.5, "line-dasharray": [1, 2], "line-opacity": 0.7 },
       });
       map.addLayer({
         id: "mh-boundary",
@@ -230,14 +287,14 @@ function MapView({
         layout: { "line-cap": "round", "line-join": "round" },
         paint: { "line-color": ["get", "color"], "line-width": 3, "line-opacity": ["get", "opacity"] },
       });
-      map.addLayer({ id: "mh-accuracy", type: "fill", source: "mh-accuracy", paint: { "fill-color": "#d9e4f0", "fill-opacity": 0.06 } });
+      map.addLayer({ id: "mh-accuracy", type: "fill", source: "mh-accuracy", paint: { "fill-color": palette.accuracy, "fill-opacity": 0.06 } });
       map.addLayer({ id: "mh-trail", type: "line", source: "mh-trail", layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-width": 4 } });
-      map.addLayer({ id: "mh-fuzzy-fill", type: "fill", source: "mh-fuzzy", paint: { "fill-color": "#3dff9a", "fill-opacity": ["get", "opacity"] } });
+      map.addLayer({ id: "mh-fuzzy-fill", type: "fill", source: "mh-fuzzy", paint: { "fill-color": palette.hider, "fill-opacity": ["get", "opacity"] } });
       map.addLayer({
         id: "mh-fuzzy-line",
         type: "line",
         source: "mh-fuzzy",
-        paint: { "line-color": "#3dff9a", "line-width": 1.5, "line-dasharray": [2, 2], "line-opacity": ["*", ["get", "opacity"], 4] },
+        paint: { "line-color": palette.hider, "line-width": 1.5, "line-dasharray": [2, 2], "line-opacity": ["*", ["get", "opacity"], 4] },
       });
       setLoaded(true);
     });
@@ -259,9 +316,9 @@ function MapView({
   useEffect(() => {
     if (!loaded) return;
     const ring = boundary ? coords(boundaryRing(boundary)) : null;
-    source("mh-boundary")?.setData(featureCollection(ring ? [polygon([ring], { color: shrinking ? "#ff6b7a" : "#3dff9a" })] : []));
+    source("mh-boundary")?.setData(featureCollection(ring ? [polygon([ring], { color: shrinking ? palette.seeker : accent })] : []));
     source("mh-outside")?.setData(featureCollection(ring ? [polygon([WORLD, ring])] : []));
-  }, [boundary, loaded, shrinking]);
+  }, [boundary, loaded, shrinking, accent]);
 
   useEffect(() => {
     if (!loaded) return;
@@ -313,7 +370,7 @@ function MapView({
     const map = mapRef.current;
     if (!map || !loaded) return;
     const list = zones ?? [];
-    const color = (z: ZoneView) => (z.alert ? "#ff3b4e" : z.occupied ? "#3dff9a" : "#ffb020");
+    const color = (z: ZoneView) => (z.alert ? palette.seeker : z.occupied ? palette.hider : palette.zone);
     source("mh-zones")?.setData(featureCollection(list.map((z) => polygon([coords(circleRing(z, z.radius))], { color: color(z) }))));
     syncMarkers(
       map,
@@ -411,7 +468,7 @@ function MapView({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !loaded) return;
-    const rgb = ROLE_COLOR[trailRole];
+    const rgb = palette.roleRgb[trailRole];
     map.setPaintProperty("mh-trail", "line-gradient", ["interpolate", ["linear"], ["line-progress"], 0, `rgba(${rgb},0)`, 1, `rgba(${rgb},0.7)`]);
   }, [trailRole, loaded]);
 
@@ -431,5 +488,14 @@ function MapView({
   );
 }
 
+/**
+ * Switching between dark/gray and light needs a different base map, so the map is
+ * rebuilt when the theme mode changes. Accent changes just recolor the overlays.
+ */
+function ThemedMapView(props: Props) {
+  const theme = useTheme();
+  return <MapView key={theme.mode} {...props} theme={theme} />;
+}
+
 // Re-render only when its inputs actually change.
-export default memo(MapView);
+export default memo(ThemedMapView);

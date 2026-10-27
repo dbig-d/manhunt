@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { PlayerPublic, RoomView } from "../../shared/protocol";
 import { ITEM_BY_ID } from "../../shared/items";
+import Appearance from "../components/Appearance";
 import Icon, { ITEM_ICON, type IconName } from "../components/Icon";
 import MapView from "../components/MapView";
 import TestingTools from "../components/TestingTools";
@@ -20,7 +21,7 @@ import Shop from "./Shop";
 const TagCodeCard = lazy(() => import("../components/TagCode").then((m) => ({ default: m.TagCodeCard })));
 const TagScanner = lazy(() => import("../components/TagCode").then((m) => ({ default: m.TagScanner })));
 
-type SheetName = "menu" | "players" | "chat" | "shop" | "tagSelf" | "tagCode" | "scan" | "bots" | "howto" | "testing" | null;
+type SheetName = "menu" | "players" | "chat" | "shop" | "tagSelf" | "tagCode" | "scan" | "bots" | "howto" | "testing" | "appearance" | null;
 const GPS_LOST_MS = 30_000;
 
 interface Banner {
@@ -378,6 +379,31 @@ export default function GameScreen({ room, view, now, onLeave }: { room: Room; v
               <SettingRow label="Sound effects">
                 <Toggle value={!muted} onChange={(on) => setMuted(!on)} label="Sound effects" />
               </SettingRow>
+              <SettingRow
+                label="Screen stays on"
+                hint={
+                  keepAwake.method === "wake-lock"
+                    ? "On, using the phone's screen lock control"
+                    : keepAwake.method === "video"
+                      ? "On, using the silent-video backup"
+                      : "Off. Tap Fix, and turn off battery saver / Low Power Mode if it won't stick"
+                }
+              >
+                {keepAwake.awake ? (
+                  <span className="tag tag--hider">
+                    <Icon name="check" size={12} />
+                    Active
+                  </span>
+                ) : (
+                  <button className="btn btn--sm" onClick={keepAwake.enable}>
+                    Fix
+                  </button>
+                )}
+              </SettingRow>
+              <button className="btn btn--block" onClick={() => setSheet("appearance")}>
+                <Icon name="palette" size={18} />
+                Appearance
+              </button>
               <button className="btn btn--block" onClick={() => setSheet("howto")}>
                 <Icon name="help" size={18} />
                 How to play
@@ -430,6 +456,11 @@ export default function GameScreen({ room, view, now, onLeave }: { room: Room; v
       {sheet === "testing" && (
         <Sheet title="Testing tools" onClose={() => setSheet(null)}>
           <TestingTools />
+        </Sheet>
+      )}
+      {sheet === "appearance" && (
+        <Sheet title="Appearance" onClose={() => setSheet(null)}>
+          <Appearance />
         </Sheet>
       )}
 

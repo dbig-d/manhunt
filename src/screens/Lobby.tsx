@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ChatMessage, ClientMessage, PlayerPublic, Role, RoomView, Settings } from "../../shared/protocol";
 import { MODES, MODE_BY_ID, isCustomized } from "../../shared/modes";
+import Appearance from "../components/Appearance";
 import Icon, { MODE_ICON, type IconName } from "../components/Icon";
 import MapView from "../components/MapView";
 import TestingTools from "../components/TestingTools";
@@ -15,7 +16,7 @@ import HowToPlay from "./HowToPlay";
 import RulesEditor, { type RulesTab } from "./RulesEditor";
 
 const ROLE_LABEL: Record<Role, string> = { seeker: "Seeker", hider: "Hider" };
-type SheetName = "mode" | "rules" | "invite" | "menu" | "player" | "howto" | "testing" | "chat";
+type SheetName = "mode" | "rules" | "invite" | "menu" | "player" | "howto" | "testing" | "chat" | "appearance";
 
 /** The rules at a glance, each one opening the editor on its own tab. */
 function ruleSummary(s: Settings): { icon: IconName; label: string; value: string; tab: RulesTab; off?: boolean }[] {
@@ -352,6 +353,10 @@ export default function Lobby({
               <Icon name="help" size={18} />
               How to play
             </button>
+            <button className="btn btn--block" onClick={() => setSheet("appearance")}>
+              <Icon name="palette" size={18} />
+              Appearance
+            </button>
             <button className="btn btn--block" onClick={() => setSheet("testing")}>
               <Icon name="wrench" size={18} />
               Testing tools
@@ -371,6 +376,11 @@ export default function Lobby({
       {sheet === "testing" && (
         <Sheet title="Testing tools" onClose={close}>
           <TestingTools />
+        </Sheet>
+      )}
+      {sheet === "appearance" && (
+        <Sheet title="Appearance" onClose={close}>
+          <Appearance />
         </Sheet>
       )}
 

@@ -4,6 +4,7 @@ import { fromLocal } from "../../shared/geo";
 import Icon, { type IconName } from "../components/Icon";
 import MapView, { type MapDot, type MapLine } from "../components/MapView";
 import { Avatar } from "../components/ui";
+import { useTheme } from "../lib/theme";
 
 const HEADLINE = { hiders: "HIDERS WIN", seekers: "SEEKERS WIN", none: "GAME OVER" } as const;
 const REASON = { time: "The timer ran out", allTagged: "Every hider was caught", host: "The host ended the game" } as const;
@@ -16,6 +17,8 @@ const AWARD_ICON: Record<string, IconName> = {
 };
 /** The whole recap plays in about this long, however long the game was. */
 const RECAP_PLAY_MS = 20_000;
+// Team colors for the replay paths (deeper shades read better on the light map).
+const TEAM_COLOR = { dark: { seeker: "#ff3b4e", hider: "#3dff9a" }, light: { seeker: "#e0313f", hider: "#10a85f" } } as const;
 
 function mmss(ms: number) {
   const t = Math.max(0, Math.round(ms / 1000));
@@ -114,6 +117,7 @@ export default function Results({ view, send, onLeave }: { view: RoomView; send:
 /** Animated replay of everyone's movement, built from points recorded every 10 s. */
 function Recap({ results, boundary }: { results: ResultsData; boundary: Boundary | null }) {
   const recap = results.recap!;
+  const light = useTheme().mode === "light";
   const duration = Math.max(1, Math.round(results.durationMs / 1000));
   const [t, setT] = useState(0);
   const [playing, setPlaying] = useState(true);
@@ -162,7 +166,7 @@ function Recap({ results, boundary }: { results: ResultsData; boundary: Boundary
       }
       if (!path.length) continue;
       const ended = flat[flat.length - 1] < t - 10 && t < duration;
-      lines.push({ id, coords: path, color: role === "seeker" ? "#ff3b4e" : "#3dff9a", opacity: 0.7 });
+      lines.push({ id, coords: path, color: TEAM_COLOR[light ? "light" : "dark"][role], opacity: 0.75 });
       const head = path[path.length - 1];
       dots.push({ id, lat: head.lat, lng: head.lng, className: `recap-pin recap-pin--${role} ${ended ? "recap-pin--gone" : ""}` });
     }
@@ -172,7 +176,7 @@ function Recap({ results, boundary }: { results: ResultsData; boundary: Boundary
       dots.push({ id: `tag-${i}`, lat: p.lat, lng: p.lng, className: "recap-tag" });
     }
     return { lines, dots };
-  }, [recap, t, byId, duration]);
+  }, [recap, t, byId, duration, light]);
 
   return (
     <section className="card">

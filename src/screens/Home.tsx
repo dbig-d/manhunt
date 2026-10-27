@@ -1,4 +1,5 @@
 import { useState } from "react";
+import Appearance from "../components/Appearance";
 import Icon from "../components/Icon";
 import TestingTools from "../components/TestingTools";
 import { Sheet } from "../components/ui";
@@ -13,7 +14,7 @@ export default function Home({ onEnter, error }: { onEnter: (code: string, name:
   const [code, setCode] = useState(() => new URLSearchParams(location.search).get("join")?.toUpperCase().slice(0, 4) ?? "");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
-  const [sheet, setSheet] = useState<"howto" | "testing" | null>(null);
+  const [sheet, setSheet] = useState<"howto" | "testing" | "appearance" | null>(null);
 
   const cleanName = name.trim();
   const remember = () => {
@@ -53,6 +54,10 @@ export default function Home({ onEnter, error }: { onEnter: (code: string, name:
 
   return (
     <main className="home screen">
+      <button className="home-theme-btn" onClick={() => setSheet("appearance")} aria-label="Change theme">
+        <i />
+        Theme
+      </button>
       <header className="home-hero">
         <div className="radar" aria-hidden="true">
           <div className="radar-sweep" />
@@ -122,6 +127,10 @@ export default function Home({ onEnter, error }: { onEnter: (code: string, name:
           <Icon name="help" size={18} />
           How to play
         </button>
+        <button className="link-btn" onClick={() => setSheet("appearance")}>
+          <Icon name="palette" size={18} />
+          Appearance
+        </button>
         <button className="link-btn" onClick={() => setSheet("testing")}>
           <Icon name="wrench" size={18} />
           Testing tools
@@ -137,6 +146,11 @@ export default function Home({ onEnter, error }: { onEnter: (code: string, name:
       {sheet === "testing" && (
         <Sheet title="Testing tools" onClose={() => setSheet(null)}>
           <TestingTools />
+        </Sheet>
+      )}
+      {sheet === "appearance" && (
+        <Sheet title="Appearance" onClose={() => setSheet(null)}>
+          <Appearance />
         </Sheet>
       )}
     </main>
