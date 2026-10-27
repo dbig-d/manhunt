@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { Game, GameError, type GameState, type Recipient } from "./game";
+import { Game, GameError, type GameState } from "./game";
 import type { ClientMessage, ServerMessage } from "../shared/protocol";
 
 /** What we remember about each phone connection (survives the room going to sleep). */
@@ -20,6 +20,8 @@ const SAVE_POSITIONS_MS = 5000;
 export class GameRoom extends DurableObject<Env> {
   private game: Game | null = null;
   private lastSavedAt = 0;
+  /** The last view sent to each phone, so unchanged views aren't sent again (saves data and battery). */
+  private lastSent = new WeakMap<WebSocket, string>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -76,7 +78,9 @@ export class GameRoom extends DurableObject<Env> {
           }
         }
         ws.serializeAttachment({ playerId: p.id } satisfies Attachment);
+        this.lastSent.delete(ws);
         this.send(ws, { type: "welcome", playerId: p.id, token: p.token });
+        this.send(ws, { type: "chatHistory", messages: game.chatHistory(p.id) });
       } else if (!playerId || !game.player(playerId)) {
         this.send(ws, { type: "error", message: "You're no longer in this room", fatal: true });
         ws.close(4003, "Not in room");
@@ -127,6 +131,10 @@ export class GameRoom extends DurableObject<Env> {
         return game.tagSelf(id, msg.byId ?? null, now);
       case "tagCode":
         return game.tagWithCode(id, String(msg.code ?? ""), now);
+      case "buy":
+        return game.buy(id, msg.item, typeof msg.targetId === "string" ? msg.targetId : undefined, now);
+      case "chat":
+        return game.chat(id, String(msg.text ?? ""), msg.quick === true, now);
       case "tagBot":
         return game.tagBot(id, String(msg.botId ?? ""), now);
       case "endGame":
@@ -223,9 +231,18 @@ export class GameRoom extends DurableObject<Env> {
       const id = this.playerOf(ws);
       const p = id ? game.player(id) : undefined;
       if (!p) continue;
-      this.send(ws, { type: "state", view: game.view(p.id, now) });
+      // Skip phones whose view hasn't changed since last time.
+      const view = JSON.stringify(game.view(p.id, now));
+      if (this.lastSent.get(ws) !== view) {
+        this.lastSent.set(ws, view);
+        try {
+          ws.send(`{"type":"state","now":${now},"view":${view}}`);
+        } catch {
+          // connection went away; its close handler will clean up
+        }
+      }
       for (const { to, event } of outbox) {
-        if (this.reaches(to, p.id, p.role)) this.send(ws, { type: "event", event });
+        if (game.reaches(to, p.id)) this.send(ws, { type: "event", event });
       }
     }
 
@@ -233,12 +250,5 @@ export class GameRoom extends DurableObject<Env> {
     const next = now + tickMs;
     const current = await this.ctx.storage.getAlarm();
     if (current === null || current > next) await this.ctx.storage.setAlarm(next);
-  }
-
-  private reaches(to: Recipient, id: string, role: string | null) {
-    if (to === "all") return true;
-    if (to === "seekers") return role === "seeker";
-    if (to === "hiders") return role === "hider";
-    return to.playerId === id;
   }
 }

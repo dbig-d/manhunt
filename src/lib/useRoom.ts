@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ClientMessage, GameEvent, RoomView, ServerMessage } from "../../shared/protocol";
+import type { ChatMessage, ClientMessage, GameEvent, RoomView, ServerMessage } from "../../shared/protocol";
 import { wsUrl } from "./api";
 
 export type ConnectionStatus = "connecting" | "open" | "reconnecting" | "closed";
@@ -9,12 +9,14 @@ type Listener = (e: { kind: "event"; event: GameEvent } | { kind: "error"; messa
 // The rejoin token lives in sessionStorage: it survives a refresh, but each tab is
 // its own player, so you can test with several tabs side by side.
 const tokenKey = (code: string) => `mh:token:${code}`;
+const CHAT_KEEP = 100;
 
 /** Live connection to one game room, reconnecting automatically when the signal drops. */
 export function useRoom(code: string | null, name: string) {
   const [view, setView] = useState<RoomView | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [fatal, setFatal] = useState<string | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const offsetRef = useRef(0);
   const listeners = useRef(new Set<Listener>());
@@ -29,9 +31,16 @@ export function useRoom(code: string | null, name: string) {
 
     setView(null);
     setFatal(null);
+    setMessages([]);
     setStatus("connecting");
 
     const emit: Listener = (e) => listeners.current.forEach((fn) => fn(e));
+    const addMessages = (list: ChatMessage[]) =>
+      setMessages((prev) => {
+        const seen = new Set(prev.map((m) => m.id));
+        const merged = [...prev, ...list.filter((m) => !seen.has(m.id))].sort((a, b) => a.at - b.at);
+        return merged.slice(-CHAT_KEEP);
+      });
 
     const connect = () => {
       ws = new WebSocket(wsUrl(`/api/rooms/${code}/ws`));
@@ -53,10 +62,14 @@ export function useRoom(code: string | null, name: string) {
             sessionStorage.setItem(tokenKey(code), msg.token);
             break;
           case "state":
-            offsetRef.current = msg.view.now - Date.now();
+            offsetRef.current = msg.now - Date.now();
             setView(msg.view);
             break;
+          case "chatHistory":
+            addMessages(msg.messages);
+            break;
           case "event":
+            if (msg.event.kind === "chat") addMessages([msg.event.msg]);
             emit({ kind: "event", event: msg.event });
             break;
           case "error":
@@ -106,7 +119,7 @@ export function useRoom(code: string | null, name: string) {
 
   const serverNow = useCallback(() => Date.now() + offsetRef.current, []);
 
-  return { view, status, fatal, send, subscribe, serverNow };
+  return { view, status, fatal, send, subscribe, serverNow, messages };
 }
 
 export type Room = ReturnType<typeof useRoom>;

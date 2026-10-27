@@ -3,8 +3,13 @@
 // player messages and clock ticks, then sends each phone its own view.
 
 import type {
+  ActiveEffect,
   Award,
+  Boundary,
+  Channel,
+  ChatMessage,
   GameEvent,
+  ItemId,
   LatLng,
   Marker,
   Phase,
@@ -14,9 +19,12 @@ import type {
   Results,
   Role,
   RoomView,
+  SettingsPatch,
   Settings,
+  ZoneView,
 } from "../shared/protocol";
 import {
+  ALARM_RADIUS_M,
   BOT_AUTO_TAG_M,
   BOT_TAG_RANGE_M,
   DEFAULT_SETTINGS,
@@ -25,9 +33,38 @@ import {
   PROXIMITY_ALERT_M,
   SPEED_UP_WINDOW_MS,
   STALE_AFTER_MS,
+  STATIC_RADIUS_M,
+  STORM_END_FRACTION,
   applySettingsPatch,
+  normalizeSettings,
 } from "../shared/settings";
-import { bearing, distance, insideBoundary, offset, randomPointInBoundary } from "../shared/geo";
+import { ITEM_BY_ID } from "../shared/items";
+import { MODE_BY_ID } from "../shared/modes";
+import { bearing, distance, insideBoundary, lerp, offset, randomPointInBoundary, scaleBoundary, toLocal } from "../shared/geo";
+
+/** Power-up effects on a player. Timestamps are when they wear off (0 = not active). */
+interface Fx {
+  ghost: boolean;
+  jam: boolean;
+  decoy: boolean;
+  staticUntil: number;
+  alarmUntil: number;
+  radarUntil: number;
+  scanUntil: number;
+  trackerUntil: number;
+  trackerTarget: string | null;
+}
+const noFx = (): Fx => ({
+  ghost: false,
+  jam: false,
+  decoy: false,
+  staticUntil: 0,
+  alarmUntil: 0,
+  radarUntil: 0,
+  scanUntil: 0,
+  trackerUntil: 0,
+  trackerTarget: null,
+});
 
 export interface PlayerState {
   id: string;
@@ -44,8 +81,8 @@ export interface PlayerState {
   status: PlayerStatus;
   pos: LatLng | null;
   posAt: number | null;
-  /** Last snapshot sent to seekers. fuzzCenter is set in fuzzy mode. */
-  ping: { pos: LatLng; at: number; fuzzCenter: LatLng | null } | null;
+  /** Last snapshot sent to seekers. fuzzCenter/radius are set when it's a blurry circle. */
+  ping: { pos: LatLng; at: number; fuzzCenter: LatLng | null; radius: number } | null;
   /** Last snapshot sent to hiders (hiderView "pinged"). */
   seekerPing: { pos: LatLng; at: number } | null;
   oobSince: number | null;
@@ -56,8 +93,38 @@ export interface PlayerState {
   distanceM: number;
   taggedAt: number | null;
   taggedBy: string | null;
-  bot: { heading: number; speed: number; pauseUntil: number } | null;
+  coins: number;
+  coinsEarned: number;
+  uses: Partial<Record<ItemId, number>>;
+  fx: Fx;
+  /** Recent positions as [lat, lng, time], for the jammer. */
+  history: number[][];
+  /** Safe zone currently stood in. */
+  zoneId: string | null;
+  lastChatAt: number;
+  bot: { heading: number; speed: number; pauseUntil: number; zoneId: string | null } | null;
 }
+
+interface Zone {
+  id: string;
+  center: LatLng;
+  radius: number;
+  spawnedAt: number;
+  endsAt: number;
+  alertUntil: number;
+}
+
+/** A quick ping dropped on the map for teammates. */
+interface Flag {
+  id: string;
+  channel: Channel;
+  byId: string;
+  pos: LatLng;
+  text: string;
+  until: number;
+}
+
+type RecapTag = NonNullable<Results["recap"]>["tags"][number];
 
 export interface GameState {
   code: string;
@@ -74,10 +141,32 @@ export interface GameState {
   lastTickAt: number | null;
   results: Results | null;
   botCounter: number;
+  /** For short unique ids (zones, chat messages, flags). */
+  counter: number;
+  zones: Zone[];
+  nextZoneAt: number | null;
+  blackoutUntil: number;
+  /** Where the storm ends up, picked when the hunt starts. */
+  stormCenter: LatLng | null;
+  stormAnnounced: boolean;
+  chat: ChatMessage[];
+  flags: Flag[];
+  /** Movement recap: flat [x, y, seconds, ...] per player, meters from the play area's center. */
+  tracks: Record<string, number[]>;
+  lastTrackAt: number | null;
+  recapTags: RecapTag[];
 }
 
-/** Who an event goes to: everyone, one team, or one player id. */
-export type Recipient = "all" | "seekers" | "hiders" | { playerId: string };
+/**
+ * Who an event goes to: everyone, one team, one player, one chat channel, or a list
+ * of players (plus, optionally, everyone in a channel).
+ */
+export type Recipient =
+  | "all"
+  | { team: Role }
+  | { playerId: string }
+  | { channel: Channel }
+  | { ids: string[]; alsoChannel?: Channel };
 export type Outbox = { to: Recipient; event: GameEvent }[];
 
 /** A rule was broken (e.g. a non-host tried to start). Shown to that player only. */
@@ -90,6 +179,18 @@ const MIN_MOVE_M = 3;
 const MAX_RUN_SPEED_MS = 10;
 const HOST_HANDOVER_MS = 20_000;
 const LOBBY_DROP_MS = 120_000;
+const HISTORY_STEP_MS = 2_000;
+const HISTORY_KEEP_MS = 45_000;
+const JAM_DELAY_MS = 30_000;
+const TRACK_EVERY_MS = 10_000;
+/** Older recap points get thinned out past this, to keep the saved room small. */
+const TRACK_MAX_POINTS = 150;
+const CHAT_KEEP = 150;
+const CHAT_MAX_LEN = 200;
+const CHAT_COOLDOWN_MS = 500;
+const FLAG_MS = 45_000;
+const ZONE_ALERT_MS = 8_000;
+const FIRST_ZONE_DELAY_MS = 30_000;
 
 export class Game {
   outbox: Outbox = [];
@@ -99,15 +200,35 @@ export class Game {
     private rand: () => number = Math.random,
     private makeId: () => string = () => crypto.randomUUID(),
   ) {
-    // Rooms saved by an older version may be missing newer fields.
-    const legacy = state.settings as Settings & { teammates?: "seekers" | "both" | "none" };
-    state.settings = { ...DEFAULT_SETTINGS, ...state.settings };
-    if (legacy.teammates) {
-      state.settings.seekersSeeSeekers = legacy.teammates !== "none";
-      state.settings.hidersSeeHiders = legacy.teammates === "both" ? "live" : "none";
-      delete (state.settings as { teammates?: unknown }).teammates;
+    Game.normalize(state, makeId);
+  }
+
+  /** Rooms saved by an older version may be missing newer fields. */
+  private static normalize(st: GameState, makeId: () => string) {
+    st.settings = normalizeSettings(st.settings);
+    st.counter ??= 0;
+    st.zones ??= [];
+    st.nextZoneAt ??= null;
+    st.blackoutUntil ??= 0;
+    st.stormCenter ??= null;
+    st.stormAnnounced ??= false;
+    st.chat ??= [];
+    st.flags ??= [];
+    st.tracks ??= {};
+    st.lastTrackAt ??= null;
+    st.recapTags ??= [];
+    for (const p of st.players) {
+      p.alias ??= makeId();
+      p.coins ??= 0;
+      p.coinsEarned ??= 0;
+      p.uses ??= {};
+      p.fx = { ...noFx(), ...(p.fx ?? {}) };
+      p.history ??= [];
+      p.zoneId ??= null;
+      p.lastChatAt ??= 0;
+      if (p.ping) p.ping.radius ??= p.ping.fuzzCenter ? FUZZY_RADIUS_M : 0;
+      if (p.bot) p.bot.zoneId ??= null;
     }
-    for (const p of state.players) p.alias ??= this.makeId();
   }
 
   static create(code: string, now: number, rand?: () => number, makeId?: () => string): Game {
@@ -116,7 +237,7 @@ export class Game {
         code,
         createdAt: now,
         phase: "lobby",
-        settings: { ...DEFAULT_SETTINGS },
+        settings: structuredClone(DEFAULT_SETTINGS),
         hostId: null,
         players: [],
         phaseEndsAt: null,
@@ -127,6 +248,17 @@ export class Game {
         lastTickAt: null,
         results: null,
         botCounter: 0,
+        counter: 0,
+        zones: [],
+        nextZoneAt: null,
+        blackoutUntil: 0,
+        stormCenter: null,
+        stormAnnounced: false,
+        chat: [],
+        flags: [],
+        tracks: {},
+        lastTrackAt: null,
+        recapTags: [],
       },
       rand,
       makeId,
@@ -161,6 +293,10 @@ export class Game {
     this.outbox.push({ to, event });
   }
 
+  private nextId(prefix: string) {
+    return `${prefix}${++this.state.counter}`;
+  }
+
   private aliveHiders() {
     return this.state.players.filter((p) => p.role === "hider" && p.status === "alive");
   }
@@ -182,6 +318,28 @@ export class Game {
     );
   }
 
+  private fresh(p: PlayerState, now: number) {
+    return !!p.pos && p.posAt !== null && now - p.posAt <= STALE_AFTER_MS;
+  }
+
+  /** Which chat a player is in right now. */
+  channelOf(p: PlayerState): Channel {
+    if (!this.active) return "all";
+    if (p.status === "out" || !p.role) return "out";
+    return p.role === "seeker" ? "seekers" : "hiders";
+  }
+
+  /** Does an event addressed to `to` reach this player? */
+  reaches(to: Recipient, playerId: string): boolean {
+    if (to === "all") return true;
+    const p = this.player(playerId);
+    if (!p) return false;
+    if ("team" in to) return p.role === to.team;
+    if ("playerId" in to) return to.playerId === playerId;
+    if ("channel" in to) return this.channelOf(p) === to.channel;
+    return to.ids.includes(playerId) || (!!to.alsoChannel && this.channelOf(p) === to.alsoChannel);
+  }
+
   pingIntervalMs(now: number) {
     const s = this.state.settings;
     const base = s.pingIntervalSec * 1000;
@@ -190,6 +348,31 @@ export class Game {
       return Math.max(15_000, base / 2);
     }
     return base;
+  }
+
+  private stormWindow() {
+    const st = this.state;
+    if (!st.settings.storm.enabled || st.huntStartedAt === null || st.phaseEndsAt === null) return null;
+    const len = st.phaseEndsAt - st.huntStartedAt;
+    return { start: st.huntStartedAt + (len * st.settings.storm.startPct) / 100, end: st.huntStartedAt + len * STORM_END_FRACTION };
+  }
+
+  /** The play area right now: the storm shrinks it and slides it toward stormCenter. */
+  boundaryAt(now: number): Boundary | null {
+    const st = this.state;
+    const b = st.settings.boundary;
+    const w = this.stormWindow();
+    if (!b || !w || st.phase !== "hunt" || !st.stormCenter) return b;
+    const t = Math.min(1, Math.max(0, (now - w.start) / Math.max(1, w.end - w.start)));
+    if (t === 0) return b;
+    const factor = 1 - (1 - st.settings.storm.finalPct / 100) * t;
+    return scaleBoundary(b, factor, lerp(b.center, st.stormCenter, t));
+  }
+
+  private stormTarget(): Boundary | null {
+    const st = this.state;
+    if (!st.settings.boundary || !st.stormCenter || st.phase !== "hunt") return null;
+    return scaleBoundary(st.settings.boundary, st.settings.storm.finalPct / 100, st.stormCenter);
   }
 
   // ---------- joining & lobby ----------
@@ -240,7 +423,14 @@ export class Game {
       distanceM: 0,
       taggedAt: null,
       taggedBy: null,
-      bot: isBot ? { heading: this.rand() * 360, speed: 1.5, pauseUntil: 0 } : null,
+      coins: 0,
+      coinsEarned: 0,
+      uses: {},
+      fx: noFx(),
+      history: [],
+      zoneId: null,
+      lastChatAt: 0,
+      bot: isBot ? { heading: this.rand() * 360, speed: 1.5, pauseUntil: 0, zoneId: null } : null,
     };
   }
 
@@ -261,7 +451,7 @@ export class Game {
       if (p.status === "alive" && p.role === "hider") {
         p.status = "out";
         p.taggedAt = now;
-        this.emit("all", { kind: "info", text: `${p.name} left the game` });
+        this.emit(this.state.settings.secretCount ? { channel: "out" } : "all", { kind: "info", text: `${p.name} left the game` });
         if (this.state.phase === "hunt" && this.aliveHiders().length === 0) this.finish("allTagged", now);
       } else {
         p.status = "out";
@@ -296,6 +486,20 @@ export class Game {
     }
   }
 
+  private remember(p: PlayerState, now: number) {
+    if (!this.active || !p.pos) return;
+    const last = p.history[p.history.length - 1];
+    if (!last || now - last[2] >= HISTORY_STEP_MS) p.history.push([p.pos.lat, p.pos.lng, now]);
+    while (p.history.length && p.history[0][2] < now - HISTORY_KEEP_MS) p.history.shift();
+  }
+
+  /** Where the player was `ms` ago (or as far back as we remember). */
+  private positionAgo(p: PlayerState, ms: number, now: number): { pos: LatLng; at: number } {
+    let best = p.history[0];
+    for (const h of p.history) if (h[2] <= now - ms) best = h;
+    return best ? { pos: { lat: best[0], lng: best[1] }, at: best[2] } : { pos: p.pos!, at: p.posAt ?? now };
+  }
+
   updateLocation(id: string, pos: LatLng, now: number) {
     const p = this.player(id);
     if (!p || p.isBot) return;
@@ -314,12 +518,17 @@ export class Game {
     p.pos = pos;
     p.posAt = now;
     p.lastSeenAt = now;
+    this.remember(p, now);
   }
 
-  updateSettings(id: string, patch: Partial<Settings>) {
+  updateSettings(id: string, patch: SettingsPatch) {
     this.requireHost(id);
     this.requirePhase("lobby");
-    this.state.settings = applySettingsPatch(this.state.settings, patch);
+    let p = patch ?? {};
+    // Picking a mode applies its preset; anything else sent along with it wins.
+    const mode = p.mode ? MODE_BY_ID[p.mode] : undefined;
+    if (mode) p = { ...mode.preset, ...p, storm: { ...mode.preset.storm, ...p.storm } };
+    this.state.settings = applySettingsPatch(this.state.settings, p);
   }
 
   setRole(id: string, targetId: string, role: Role | null) {
@@ -416,53 +625,99 @@ export class Game {
       p.distanceM = 0;
       p.taggedAt = null;
       p.taggedBy = null;
+      p.coins = 0;
+      p.coinsEarned = 0;
+      p.uses = {};
+      p.fx = noFx();
+      p.history = [];
+      p.zoneId = null;
       if (p.isBot) {
         if (p.role === "seeker") p.pos = offset(b.center, this.rand() * 15, this.rand() * 360);
         else if (!p.pos || !insideBoundary(b, p.pos)) p.pos = randomPointInBoundary(b, 10, this.rand);
         p.posAt = now;
-        p.bot = { heading: this.rand() * 360, speed: 1.5, pauseUntil: 0 };
+        p.bot = { heading: this.rand() * 360, speed: 1.5, pauseUntil: 0, zoneId: null };
       }
     }
 
-    this.state.results = null;
-    this.state.huntStartedAt = null;
-    this.state.nextPingAt = null;
-    this.state.nextSeekerPingAt = null;
-    this.state.nextTagCodeAt = null;
-    this.state.lastTickAt = now;
-    this.state.phase = "headstart";
-    this.state.phaseEndsAt = now + s.headStartSec * 1000;
+    const st = this.state;
+    st.results = null;
+    st.huntStartedAt = null;
+    st.nextPingAt = null;
+    st.nextSeekerPingAt = null;
+    st.nextTagCodeAt = null;
+    st.lastTickAt = now;
+    st.zones = [];
+    st.nextZoneAt = null;
+    st.blackoutUntil = 0;
+    st.stormCenter = null;
+    st.stormAnnounced = false;
+    st.flags = [];
+    st.tracks = {};
+    st.lastTrackAt = null;
+    st.recapTags = [];
+    st.phase = "headstart";
+    st.phaseEndsAt = now + s.headStartSec * 1000;
     this.emit("all", { kind: "phase", phase: "headstart" });
     if (s.headStartSec === 0) this.beginHunt(now);
   }
 
   private beginHunt(now: number) {
-    const s = this.state.settings;
-    this.state.phase = "hunt";
-    this.state.huntStartedAt = now;
-    this.state.phaseEndsAt = now + s.gameLengthMin * 60_000;
+    const st = this.state;
+    const s = st.settings;
+    st.phase = "hunt";
+    st.huntStartedAt = now;
+    st.phaseEndsAt = now + s.gameLengthMin * 60_000;
     this.emit("all", { kind: "phase", phase: "hunt" });
+    if (s.storm.enabled && s.boundary) {
+      // Anywhere the final, smaller area still fits inside the original one.
+      st.stormCenter = randomPointInBoundary(scaleBoundary(s.boundary, 1 - s.storm.finalPct / 100), 0, this.rand);
+    }
+    if (s.zones.enabled) st.nextZoneAt = now + Math.min(FIRST_ZONE_DELAY_MS, s.zones.everySec * 1000);
     this.doPing(now);
-    this.state.nextPingAt = now + this.pingIntervalMs(now);
+    st.nextPingAt = now + this.pingIntervalMs(now);
     if (s.hiderView === "pinged") {
       this.doSeekerPing(now);
-      this.state.nextSeekerPingAt = now + s.hiderViewIntervalSec * 1000;
+      st.nextSeekerPingAt = now + s.hiderViewIntervalSec * 1000;
     }
     if (s.tagMode === "qr") this.rotateTagCodes(now);
+    this.recordTracks(now);
   }
 
   private doPing(now: number) {
-    const fuzzy = this.state.settings.pingStyle === "fuzzy";
+    const s = this.state.settings;
     for (const p of this.aliveHiders()) {
       if (!p.pos) continue;
-      p.ping = {
-        pos: p.pos,
-        at: p.posAt ?? now,
-        // The real position is somewhere inside the circle, not at its center.
-        fuzzCenter: fuzzy ? offset(p.pos, this.rand() * FUZZY_RADIUS_M * 0.7, this.rand() * 360) : null,
-      };
+      // Ghost: skip this ping, so seekers keep seeing the old spot.
+      if (p.fx.ghost) {
+        p.fx.ghost = false;
+        continue;
+      }
+      let { pos, at } = { pos: p.pos, at: p.posAt ?? now };
+      if (p.fx.jam) {
+        ({ pos, at } = this.positionAgo(p, JAM_DELAY_MS, now));
+        p.fx.jam = false;
+      }
+      if (p.fx.decoy) {
+        pos = this.decoyPoint(pos, now);
+        p.fx.decoy = false;
+      }
+      const blurry = s.pingStyle === "fuzzy" || (s.zones.pingEffect === "fuzzy" && p.zoneId !== null);
+      const radius = p.fx.staticUntil > now ? STATIC_RADIUS_M : blurry ? FUZZY_RADIUS_M : 0;
+      // The real position is somewhere inside the circle, not at its center.
+      const fuzzCenter = radius ? offset(pos, this.rand() * radius * 0.7, this.rand() * 360) : null;
+      p.ping = { pos, at, fuzzCenter, radius };
     }
     this.emit("all", { kind: "ping" });
+  }
+
+  private decoyPoint(from: LatLng, now: number): LatLng {
+    const b = this.boundaryAt(now);
+    let q = from;
+    for (let i = 0; i < 12; i++) {
+      q = offset(from, 50 + this.rand() * 50, this.rand() * 360);
+      if (!b || insideBoundary(b, q)) return q;
+    }
+    return q;
   }
 
   private doSeekerPing(now: number) {
@@ -478,55 +733,133 @@ export class Game {
       p.prevTagCode = p.tagCode;
       if (p.tagCode) used.add(p.tagCode);
     }
-    for (const p of this.aliveHiders()) {
-      let code: string;
-      do code = String(Math.floor(this.rand() * 10_000)).padStart(4, "0");
-      while (used.has(code));
-      used.add(code);
-      p.tagCode = code;
-    }
+    for (const p of this.aliveHiders()) p.tagCode = this.freshTagCode(used);
     this.state.nextTagCodeAt = now + TAG_CODE_ROTATE_MS;
+  }
+
+  private freshTagCode(used = new Set(this.aliveHiders().flatMap((h) => [h.tagCode, h.prevTagCode]).filter(Boolean) as string[])) {
+    let code: string;
+    do code = String(Math.floor(this.rand() * 10_000)).padStart(4, "0");
+    while (used.has(code));
+    used.add(code);
+    return code;
   }
 
   // ---------- the clock ----------
 
   tick(now: number) {
     if (!this.active) return;
-    const s = this.state.settings;
-    const dt = this.state.lastTickAt === null ? 1 : Math.min(5, Math.max(0, (now - this.state.lastTickAt) / 1000));
-    this.state.lastTickAt = now;
+    const st = this.state;
+    const s = st.settings;
+    const dt = st.lastTickAt === null ? 1 : Math.min(5, Math.max(0, (now - st.lastTickAt) / 1000));
+    st.lastTickAt = now;
 
     this.moveBots(dt, now);
 
-    if (this.state.phase === "headstart" && this.state.phaseEndsAt !== null && now >= this.state.phaseEndsAt) {
+    if (st.phase === "headstart" && st.phaseEndsAt !== null && now >= st.phaseEndsAt) {
       this.beginHunt(now);
     }
 
-    if (this.state.phase === "hunt") {
-      if (this.state.nextPingAt !== null && now >= this.state.nextPingAt) {
+    if (st.phase === "hunt") {
+      if (st.nextPingAt !== null && now >= st.nextPingAt) {
         this.doPing(now);
-        this.state.nextPingAt = now + this.pingIntervalMs(now);
+        st.nextPingAt = now + this.pingIntervalMs(now);
       }
-      if (s.hiderView === "pinged" && this.state.nextSeekerPingAt !== null && now >= this.state.nextSeekerPingAt) {
+      if (s.hiderView === "pinged" && st.nextSeekerPingAt !== null && now >= st.nextSeekerPingAt) {
         this.doSeekerPing(now);
-        this.state.nextSeekerPingAt = now + s.hiderViewIntervalSec * 1000;
+        st.nextSeekerPingAt = now + s.hiderViewIntervalSec * 1000;
       }
-      if (s.tagMode === "qr" && this.state.nextTagCodeAt !== null && now >= this.state.nextTagCodeAt) {
+      if (s.tagMode === "qr" && st.nextTagCodeAt !== null && now >= st.nextTagCodeAt) {
         this.rotateTagCodes(now);
       }
+      const storm = this.stormWindow();
+      if (storm && !st.stormAnnounced && now >= storm.start) {
+        st.stormAnnounced = true;
+        this.emit("all", { kind: "storm" });
+      }
+      this.tickZones(dt, now);
+      if (st.lastTrackAt === null || now - st.lastTrackAt >= TRACK_EVERY_MS) this.recordTracks(now);
     }
+    st.flags = st.flags.filter((f) => f.until > now);
 
     this.checkBounds(now);
-    if (this.state.phase === "hunt") this.botTags(now);
+    if (st.phase === "hunt") this.botTags(now);
 
-    if (this.state.phase === "hunt" && this.state.phaseEndsAt !== null && now >= this.state.phaseEndsAt) {
+    if (st.phase === "hunt" && st.phaseEndsAt !== null && now >= st.phaseEndsAt) {
       this.finish("time", now);
+    }
+  }
+
+  private tickZones(dt: number, now: number) {
+    const st = this.state;
+    const z = st.settings.zones;
+    st.zones = st.zones.filter((zone) => zone.endsAt > now);
+    if (!z.enabled) return;
+    const area = this.boundaryAt(now);
+
+    if (area && st.nextZoneAt !== null && now >= st.nextZoneAt && st.zones.length < z.maxActive) {
+      this.spawnZone(area, now);
+      st.nextZoneAt = now + z.everySec * 1000;
+    }
+
+    const hiders = this.aliveHiders();
+    for (const p of hiders) {
+      const inside = this.fresh(p, now) ? st.zones.find((zone) => distance(zone.center, p.pos!) <= zone.radius) : undefined;
+      if (inside && inside.id !== p.zoneId && z.pingEffect === "alert") {
+        inside.alertUntil = now + ZONE_ALERT_MS;
+        this.emit({ team: "seeker" }, { kind: "zone", what: "alert" });
+      }
+      p.zoneId = inside?.id ?? null;
+    }
+    // Each zone hands out a fixed rate, split between everyone inside it.
+    for (const zone of st.zones) {
+      const inside = hiders.filter((p) => p.zoneId === zone.id);
+      if (!inside.length) continue;
+      const share = ((z.coinsPerMin / 60) * dt) / inside.length;
+      for (const p of inside) {
+        p.coins += share;
+        p.coinsEarned += share;
+      }
+    }
+  }
+
+  private spawnZone(area: Boundary, now: number) {
+    const st = this.state;
+    const radius = st.settings.zones.radiusM;
+    let center = randomPointInBoundary(area, radius + 5, this.rand);
+    for (let i = 0; i < 12; i++) {
+      if (st.zones.every((o) => distance(o.center, center) > o.radius + radius + 10)) break;
+      center = randomPointInBoundary(area, radius + 5, this.rand);
+    }
+    st.zones.push({ id: this.nextId("z"), center, radius, spawnedAt: now, endsAt: now + st.settings.zones.durationSec * 1000, alertUntil: 0 });
+    this.emit("all", { kind: "zone", what: "spawn" });
+  }
+
+  /** Every 10 s, note where everyone is for the movement recap. */
+  private recordTracks(now: number) {
+    const st = this.state;
+    const origin = st.settings.boundary?.center;
+    if (!origin || st.huntStartedAt === null) return;
+    st.lastTrackAt = now;
+    const t = Math.round((now - st.huntStartedAt) / 1000);
+    for (const p of st.players) {
+      if (!p.startRole || p.status !== "alive" || !p.pos) continue;
+      const { x, y } = toLocal(origin, p.pos);
+      const track = (st.tracks[p.id] ??= []);
+      track.push(Math.round(x), Math.round(y), t);
+      if (track.length / 3 > TRACK_MAX_POINTS) {
+        // Thin out: keep every other point (and always the newest).
+        const thinned: number[] = [];
+        for (let i = 0; i < track.length; i += 6) thinned.push(track[i], track[i + 1], track[i + 2]);
+        if (thinned[thinned.length - 1] !== t) thinned.push(Math.round(x), Math.round(y), t);
+        st.tracks[p.id] = thinned;
+      }
     }
   }
 
   private checkBounds(now: number) {
     const s = this.state.settings;
-    const b = s.boundary;
+    const b = this.boundaryAt(now);
     if (!b) return;
     for (const p of this.state.players) {
       if (p.status !== "alive" || !p.role || !p.pos) continue;
@@ -545,12 +878,13 @@ export class Game {
   }
 
   private moveBots(dt: number, now: number) {
-    const b = this.state.settings.boundary;
+    const b = this.boundaryAt(now);
     if (!b || dt <= 0) return;
     for (const p of this.state.players) {
       if (!p.isBot || !p.bot || !p.pos || p.status !== "alive" || !p.role) continue;
       const brain = p.bot;
       p.posAt = now; // a bot standing still still knows where it is
+      this.remember(p, now);
 
       if (p.role === "seeker") {
         if (this.state.phase === "headstart") continue; // seekers wait for the head start to end
@@ -562,13 +896,26 @@ export class Game {
         }
         brain.speed = 2.5;
       } else {
-        if (brain.pauseUntil > now) continue;
-        if (this.rand() < 0.03 * dt) {
-          brain.pauseUntil = now + (5 + this.rand() * 20) * 1000; // stop and "hide" for a bit
-          continue;
+        // Now and then a hider bot heads for a safe zone and camps there to collect coins.
+        let zone = this.state.zones.find((z) => z.id === brain.zoneId);
+        if (!zone) brain.zoneId = null;
+        if (!zone && this.state.zones.length && this.rand() < 0.02 * dt) {
+          zone = this.state.zones[Math.floor(this.rand() * this.state.zones.length)];
+          brain.zoneId = zone.id;
         }
-        brain.heading += (this.rand() - 0.5) * 50 * dt;
-        brain.speed = 1.2 + this.rand() * 1.3;
+        if (zone) {
+          if (distance(p.pos, zone.center) < zone.radius * 0.6) continue;
+          brain.heading = bearing(p.pos, zone.center) + (this.rand() - 0.5) * 30;
+          brain.speed = 2;
+        } else {
+          if (brain.pauseUntil > now) continue;
+          if (this.rand() < 0.03 * dt) {
+            brain.pauseUntil = now + (5 + this.rand() * 20) * 1000; // stop and "hide" for a bit
+            continue;
+          }
+          brain.heading += (this.rand() - 0.5) * 50 * dt;
+          brain.speed = 1.2 + this.rand() * 1.3;
+        }
       }
 
       let next = offset(p.pos, brain.speed * dt, brain.heading);
@@ -605,8 +952,8 @@ export class Game {
     for (const seeker of this.state.players) {
       if (!seeker.isBot || seeker.role !== "seeker" || seeker.status !== "alive" || !seeker.pos) continue;
       for (const h of this.aliveHiders()) {
-        if (!h.pos || h.posAt === null || now - h.posAt > STALE_AFTER_MS) continue;
-        if (distance(seeker.pos, h.pos) <= BOT_AUTO_TAG_M) this.tag(h, seeker.id, "tag", now);
+        if (!this.fresh(h, now)) continue;
+        if (distance(seeker.pos, h.pos!) <= BOT_AUTO_TAG_M) this.tag(h, seeker.id, "tag", now);
         if (this.state.phase !== "hunt") return;
       }
     }
@@ -616,6 +963,12 @@ export class Game {
 
   private tag(hider: PlayerState, byId: string | null, reason: "tag" | "oob", now: number) {
     if (hider.status !== "alive" || hider.role !== "hider") return;
+    const st = this.state;
+    const origin = st.settings.boundary?.center;
+    if (origin && hider.pos && st.huntStartedAt !== null) {
+      const { x, y } = toLocal(origin, hider.pos);
+      st.recapTags.push({ t: Math.round((now - st.huntStartedAt) / 1000), x: Math.round(x), y: Math.round(y), playerId: hider.id, byId });
+    }
     hider.taggedAt = now;
     hider.taggedBy = byId;
     hider.ping = null;
@@ -623,11 +976,21 @@ export class Game {
     hider.revealed = false;
     hider.tagCode = null;
     hider.prevTagCode = null;
-    if (this.state.settings.mode === "infection") hider.role = "seeker";
+    hider.zoneId = null;
+    if (st.settings.whenTagged === "seeker") hider.role = "seeker";
     else hider.status = "out";
     const by = byId ? this.player(byId) : undefined;
-    if (by) by.tags++;
-    this.emit("all", { kind: "tagged", playerId: hider.id, byId: by?.id ?? null, reason });
+    if (by) {
+      by.tags++;
+      if (st.settings.shop.enabled && st.settings.shop.seekerEconomy) {
+        by.coins += st.settings.shop.coinsPerTag;
+        by.coinsEarned += st.settings.shop.coinsPerTag;
+      }
+    }
+    const event: GameEvent = { kind: "tagged", playerId: hider.id, byId: by?.id ?? null, reason };
+    // Night Time: only the two players involved (and spectators) hear about it.
+    if (st.settings.secretCount) this.emit({ ids: [hider.id, by?.id].filter(Boolean) as string[], alsoChannel: "out" }, event);
+    else this.emit("all", event);
     if (this.aliveHiders().length === 0) this.finish("allTagged", now);
   }
 
@@ -661,6 +1024,127 @@ export class Game {
     this.tag(bot, me.id, "tag", now);
   }
 
+  // ---------- the shop ----------
+
+  buy(id: string, item: ItemId, targetId: string | undefined, now: number) {
+    this.requirePhase("hunt");
+    const shop = this.state.settings.shop;
+    const info = ITEM_BY_ID[item];
+    if (!info) throw new GameError("That item doesn't exist");
+    if (!shop.enabled) throw new GameError("The shop is closed this game");
+    const cfg = shop.items[item];
+    if (!cfg.enabled) throw new GameError(`${info.name} is turned off this game`);
+    if (info.team === "seeker" && !shop.seekerEconomy) throw new GameError("Seeker items are turned off this game");
+    const me = this.mustPlayer(id);
+    if (me.status !== "alive" || me.role !== info.team) throw new GameError(`Only ${info.team}s can use ${info.name}`);
+    const used = me.uses[item] ?? 0;
+    if (cfg.limit > 0 && used >= cfg.limit) throw new GameError(`You've used all your ${info.name} charges`);
+    if (me.coins + 1e-9 < cfg.price) throw new GameError(`You need ${cfg.price} coins for ${info.name}`);
+    this.useItem(me, item, targetId, now); // may refuse before charging
+    me.coins -= cfg.price;
+    me.uses[item] = used + 1;
+    this.emit({ playerId: me.id }, { kind: "item", item, mine: true });
+  }
+
+  private useItem(me: PlayerState, item: ItemId, targetId: string | undefined, now: number) {
+    const fx = me.fx;
+    const until = (current: number) => Math.max(now, current) + (ITEM_BY_ID[item].durationSec ?? 0) * 1000;
+    const once = (active: boolean) => {
+      if (active) throw new GameError("That's already waiting for your next ping");
+    };
+    switch (item) {
+      case "jammer":
+        once(fx.jam);
+        fx.jam = true;
+        return;
+      case "ghost":
+        once(fx.ghost);
+        fx.ghost = true;
+        return;
+      case "decoy":
+        once(fx.decoy);
+        fx.decoy = true;
+        return;
+      case "static":
+        fx.staticUntil = until(fx.staticUntil);
+        return;
+      case "alarm":
+        fx.alarmUntil = until(fx.alarmUntil);
+        return;
+      case "radar":
+        fx.radarUntil = until(fx.radarUntil);
+        return;
+      case "blackout":
+        this.state.blackoutUntil = until(this.state.blackoutUntil);
+        this.emit({ team: "seeker" }, { kind: "item", item, mine: false });
+        return;
+      case "revive":
+        return this.revive(targetId, now);
+      case "scan":
+        fx.scanUntil = until(fx.scanUntil);
+        return;
+      case "instantPing":
+        this.doPing(now);
+        return;
+      case "tracker": {
+        let best: PlayerState | null = null;
+        for (const h of this.aliveHiders()) {
+          if (h.pos && me.pos && (!best || distance(me.pos, h.pos) < distance(me.pos, best.pos!))) best = h;
+        }
+        if (!best) throw new GameError("There's nobody to track right now");
+        fx.trackerTarget = best.id;
+        fx.trackerUntil = until(fx.trackerUntil);
+        return;
+      }
+    }
+  }
+
+  private revive(targetId: string | undefined, now: number) {
+    const target = targetId ? this.player(targetId) : undefined;
+    if (!target || target.startRole !== "hider" || target.taggedAt === null || (target.role === "hider" && target.status === "alive")) {
+      throw new GameError("Pick a caught hider to bring back");
+    }
+    target.status = "alive";
+    target.role = "hider";
+    target.taggedAt = null;
+    target.taggedBy = null;
+    target.ping = null;
+    target.oobSince = null;
+    target.revealed = false;
+    target.fx = noFx();
+    if (this.state.settings.tagMode === "qr") target.tagCode = this.freshTagCode();
+    this.remember(target, now);
+    this.emit(this.state.settings.secretCount ? { ids: [target.id], alsoChannel: "hiders" } : "all", { kind: "revived", playerId: target.id });
+  }
+
+  // ---------- chat ----------
+
+  chat(id: string, text: string, quick: boolean, now: number) {
+    const me = this.mustPlayer(id);
+    const clean = String(text ?? "").replace(/\s+/g, " ").trim().slice(0, CHAT_MAX_LEN);
+    if (!clean) return;
+    if (now - me.lastChatAt < CHAT_COOLDOWN_MS) throw new GameError("Slow down a little");
+    me.lastChatAt = now;
+    const channel = this.channelOf(me);
+    const msg: ChatMessage = { id: this.nextId("m"), channel, fromId: me.id, name: me.name, text: clean, at: now, quick: !!quick };
+    const chat = this.state.chat;
+    chat.push(msg);
+    if (chat.length > CHAT_KEEP) chat.splice(0, chat.length - CHAT_KEEP);
+    // Quick pings also drop a flag on teammates' maps where you're standing.
+    if (quick && me.pos && this.active) {
+      this.state.flags.push({ id: this.nextId("f"), channel, byId: me.id, pos: me.pos, text: clean, until: now + FLAG_MS });
+    }
+    this.emit({ channel }, { kind: "chat", msg });
+  }
+
+  /** The messages a player can read right now (sent when they connect). */
+  chatHistory(id: string): ChatMessage[] {
+    const me = this.player(id);
+    if (!me) return [];
+    const channel = this.channelOf(me);
+    return this.state.chat.filter((m) => m.channel === channel).slice(-60);
+  }
+
   // ---------- ending ----------
 
   endGame(id: string, now: number) {
@@ -671,6 +1155,7 @@ export class Game {
 
   private finish(reason: Results["reason"], now: number) {
     const st = this.state;
+    if (st.phase === "hunt") this.recordTracks(now);
     const huntStart = st.huntStartedAt;
     const aliveHiders = this.aliveHiders().length;
     const winner: Results["winner"] =
@@ -689,6 +1174,8 @@ export class Game {
           p.startRole === "hider" ? (huntStart === null ? 0 : Math.max(0, (p.taggedAt ?? now) - huntStart)) : null,
         wasTagged: p.taggedAt !== null,
         distanceM: Math.round(p.distanceM),
+        coinsEarned: Math.floor(p.coinsEarned),
+        itemsUsed: Object.values(p.uses).reduce((a, b) => a + (b ?? 0), 0),
       }));
 
     const awards: Award[] = [];
@@ -700,21 +1187,38 @@ export class Game {
       const last = hiders.reduce((a, b) => ((b.survivalMs ?? 0) > (a.survivalMs ?? 0) ? b : a));
       awards.push({ title: "Last one standing", playerId: last.id, detail: `Survived ${formatDuration(last.survivalMs ?? 0)}` });
     }
-    const topTagger = stats.reduce<PlayerStats | null>((a, b) => (b.tags > (a?.tags ?? 0) ? b : a), null);
+    const most = (key: "tags" | "distanceM" | "coinsEarned") =>
+      stats.reduce<PlayerStats | null>((a, b) => (b[key] > (a?.[key] ?? 0) ? b : a), null);
+    const topTagger = most("tags");
     if (topTagger) awards.push({ title: "Top tagger", playerId: topTagger.id, detail: `${topTagger.tags} tag${topTagger.tags === 1 ? "" : "s"}` });
-    const runner = stats.reduce<PlayerStats | null>((a, b) => (b.distanceM > (a?.distanceM ?? 0) ? b : a), null);
+    const runner = most("distanceM");
     if (runner) awards.push({ title: "Marathon", playerId: runner.id, detail: `${runner.distanceM} m covered` });
+    const banker = most("coinsEarned");
+    if (banker) awards.push({ title: "Moneybags", playerId: banker.id, detail: `${banker.coinsEarned} coins collected` });
 
-    st.results = { winner, reason, durationMs: huntStart === null ? 0 : now - huntStart, stats, awards };
+    const origin = st.settings.boundary?.center;
+    st.results = {
+      winner,
+      reason,
+      durationMs: huntStart === null ? 0 : now - huntStart,
+      stats,
+      awards,
+      recap: origin && huntStart !== null ? { origin, tracks: st.tracks, tags: st.recapTags } : null,
+    };
     st.phase = "results";
     st.phaseEndsAt = null;
     st.nextPingAt = null;
     st.nextSeekerPingAt = null;
     st.nextTagCodeAt = null;
+    st.zones = [];
+    st.flags = [];
+    st.blackoutUntil = 0;
     for (const p of st.players) {
       p.oobSince = null;
       p.revealed = false;
       p.tagCode = null;
+      p.history = [];
+      p.zoneId = null;
     }
     this.emit("all", { kind: "phase", phase: "results" });
   }
@@ -732,10 +1236,17 @@ export class Game {
       p.status = "alive";
       p.ping = null;
       p.seekerPing = null;
+      p.coins = 0;
+      p.uses = {};
+      p.fx = noFx();
     }
     st.phase = "lobby";
+    // The recap has been shown; location history goes with it.
     st.results = null;
+    st.tracks = {};
+    st.recapTags = [];
     st.huntStartedAt = null;
+    st.stormCenter = null;
     if (!this.player(st.hostId ?? "")) this.handOverHost();
     this.emit("all", { kind: "phase", phase: "lobby" });
   }
@@ -747,19 +1258,31 @@ export class Game {
     const s = st.settings;
     const me = this.mustPlayer(viewerId);
     const spectating = !this.active || me.status === "out" || me.role === null;
+    const hunting = st.phase === "hunt";
+    const aliveHider = !spectating && me.role === "hider";
+    const aliveSeeker = !spectating && me.role === "seeker";
+    // Night Time: while you're still playing, you can't tell who's been caught.
+    const secret = s.secretCount && this.active && !spectating;
+    const blackedOut = aliveSeeker && st.blackoutUntil > now;
+    const radar = aliveHider && me.fx.radarUntil > now;
+    const tracking = aliveSeeker && me.fx.trackerUntil > now ? me.fx.trackerTarget : null;
 
-    const players: PlayerPublic[] = st.players.map((p) => ({
-      id: p.id,
-      name: p.name,
-      isBot: p.isBot,
-      isHost: p.id === st.hostId,
-      connected: p.isBot || p.connected,
-      role: p.role,
-      volunteer: p.volunteer,
-      status: p.status,
-      stale: s.stalePenalty !== "off" && this.isStale(p, now),
-      revealed: p.revealed,
-    }));
+    const players: PlayerPublic[] = st.players.map((p) => {
+      const hiddenFate = secret && p.startRole === "hider";
+      return {
+        id: p.id,
+        name: p.name,
+        isBot: p.isBot,
+        isHost: p.id === st.hostId,
+        connected: p.isBot || p.connected,
+        role: p.role,
+        volunteer: p.volunteer,
+        status: hiddenFate ? "alive" : p.status,
+        tagged: !hiddenFate && p.startRole === "hider" && p.taggedAt !== null,
+        stale: s.stalePenalty !== "off" && this.isStale(p, now),
+        revealed: p.revealed,
+      };
+    });
 
     const markers: Marker[] = [];
     for (const p of st.players) {
@@ -775,6 +1298,7 @@ export class Game {
       if (p.status !== "alive" || !p.role) continue;
 
       const teammate = p.role === me.role;
+      if (blackedOut && !teammate) continue;
       // Anonymous mode: the other team's pins carry a throwaway id instead of who they are.
       const who = !teammate && s.anonymous ? { key: p.alias, playerId: null, role: p.role } : named;
       const live: Marker = { ...who, lat: p.pos.lat, lng: p.pos.lng, kind: "live", at: p.posAt ?? now };
@@ -788,37 +1312,77 @@ export class Game {
           if (s.seekersSeeSeekers) markers.push(live);
         } else if (s.hidersSeeHiders === "live") {
           markers.push(live);
-        } else if (s.hidersSeeHiders === "pings" && st.phase === "hunt" && p.ping) {
+        } else if (s.hidersSeeHiders === "pings" && hunting && p.ping) {
           markers.push({ ...who, lat: p.ping.pos.lat, lng: p.ping.pos.lng, kind: "ping", at: p.ping.at });
         }
       } else if (me.role === "seeker") {
-        if (st.phase === "hunt" && p.ping) {
+        if (tracking === p.id) {
+          markers.push(live);
+        } else if (hunting && p.ping) {
           const c = p.ping.fuzzCenter;
           markers.push(
             c
-              ? { ...who, lat: c.lat, lng: c.lng, kind: "fuzzy", radius: FUZZY_RADIUS_M, at: p.ping.at }
+              ? { ...who, lat: c.lat, lng: c.lng, kind: "fuzzy", radius: p.ping.radius, at: p.ping.at }
               : { ...who, lat: p.ping.pos.lat, lng: p.ping.pos.lng, kind: "ping", at: p.ping.at },
           );
         }
+      } else if (radar) {
+        markers.push(live);
       } else if (s.hiderView === "pinged" && p.seekerPing) {
         markers.push({ ...who, lat: p.seekerPing.pos.lat, lng: p.seekerPing.pos.lng, kind: "ping", at: p.seekerPing.at });
       }
     }
 
-    const aliveHider = me.role === "hider" && me.status === "alive";
-    const aliveSeeker = me.role === "seeker" && me.status === "alive";
-    const hunting = st.phase === "hunt";
-    const seekersNearby =
+    // Teammates' quick pings.
+    const channel = this.channelOf(me);
+    for (const f of st.flags) {
+      if (f.channel !== channel || f.until <= now) continue;
+      const by = this.player(f.byId);
+      markers.push({ key: f.id, playerId: f.byId, role: by?.role ?? null, kind: "flag", label: f.text, lat: f.pos.lat, lng: f.pos.lng, at: f.until - FLAG_MS });
+    }
+
+    const canSeeOccupancy = spectating || (aliveSeeker && me.fx.scanUntil > now);
+    const zones: ZoneView[] = st.zones
+      .filter((z) => z.endsAt > now)
+      .map((z) => ({
+        id: z.id,
+        lat: z.center.lat,
+        lng: z.center.lng,
+        radius: z.radius,
+        spawnedAt: z.spawnedAt,
+        endsAt: z.endsAt,
+        alert: z.alertUntil > now,
+        occupied: canSeeOccupancy ? this.aliveHiders().some((h) => h.zoneId === z.id) : null,
+      }));
+
+    const nearbySeeker = (radiusM: number) =>
+      !!me.pos && st.players.some((p) => p.role === "seeker" && p.status === "alive" && p.pos && distance(p.pos, me.pos!) <= radiusM);
+    const proximityAlert =
       hunting &&
       aliveHider &&
-      s.hiderView === "proximity" &&
-      !!me.pos &&
-      st.players.some((p) => p.role === "seeker" && p.status === "alive" && p.pos && distance(p.pos, me.pos!) <= PROXIMITY_ALERT_M);
+      ((s.hiderView === "proximity" && nearbySeeker(PROXIMITY_ALERT_M)) || (me.fx.alarmUntil > now && nearbySeeker(ALARM_RADIUS_M)));
+
+    const effects: ActiveEffect[] = [];
+    if (!spectating) {
+      const fx = me.fx;
+      if (fx.ghost) effects.push({ item: "ghost", until: null });
+      if (fx.jam) effects.push({ item: "jammer", until: null });
+      if (fx.decoy) effects.push({ item: "decoy", until: null });
+      const timed: [ItemId, number][] = [
+        ["static", fx.staticUntil],
+        ["alarm", fx.alarmUntil],
+        ["radar", fx.radarUntil],
+        ["scan", fx.scanUntil],
+        ["tracker", fx.trackerUntil],
+      ];
+      for (const [item, until] of timed) if (until > now) effects.push({ item, until });
+    }
+
+    const storm = this.stormWindow();
 
     return {
       code: st.code,
       phase: st.phase,
-      now,
       settings: s,
       hostId: st.hostId,
       players,
@@ -835,15 +1399,26 @@ export class Game {
             : null,
         tagCode: hunting && aliveHider && s.tagMode === "qr" ? me.tagCode : null,
         tagCodeRefreshAt: hunting && aliveHider && s.tagMode === "qr" ? st.nextTagCodeAt : null,
-        proximityAlert: seekersNearby,
+        proximityAlert,
         taggableBots:
           hunting && aliveSeeker && me.pos
             ? st.players
                 .filter((p) => p.isBot && p.role === "hider" && p.status === "alive" && p.pos && distance(p.pos, me.pos!) <= BOT_TAG_RANGE_M)
                 .map((p) => p.id)
             : [],
+        coins: Math.floor(me.coins * 10) / 10,
+        uses: me.uses,
+        effects,
+        blackoutUntil: blackedOut ? st.blackoutUntil : null,
+        zoneId: aliveHider ? me.zoneId : null,
+        channel,
       },
       markers,
+      zones,
+      boundaryNow: this.boundaryAt(now),
+      stormTarget: this.stormTarget(),
+      stormStartsAt: hunting && storm ? storm.start : null,
+      hidersLeft: secret ? null : this.aliveHiders().length,
       phaseEndsAt: st.phaseEndsAt,
       nextPingAt: hunting ? st.nextPingAt : st.phase === "headstart" ? st.phaseEndsAt : null,
       nextSeekerPingAt:

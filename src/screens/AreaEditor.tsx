@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Boundary, LatLng } from "../../shared/protocol";
 import { LIMITS } from "../../shared/settings";
+import Icon from "../components/Icon";
 import MapView from "../components/MapView";
 import { Segmented } from "../components/ui";
 import { DEFAULT_CENTER, useGps } from "../lib/location";
@@ -26,9 +27,7 @@ export default function AreaEditor({ initial, onSave, onCancel }: {
   onCancel: () => void;
 }) {
   const gps = useGps();
-  const [draft, setDraft] = useState<Boundary>(
-    () => initial ?? { shape: "circle", center: gps.pos ?? DEFAULT_CENTER, radius: 150 },
-  );
+  const [draft, setDraft] = useState<Boundary>(() => initial ?? { shape: "circle", center: gps.pos ?? DEFAULT_CENTER, radius: 150 });
   const [fitKey, setFitKey] = useState(0);
   const [areas, setAreas] = useState<SavedArea[]>(loadAreas);
   const [saveName, setSaveName] = useState("");
@@ -47,15 +46,22 @@ export default function AreaEditor({ initial, onSave, onCancel }: {
 
   return (
     <div className="area-editor">
+      <div className="area-top">
+        <button className="icon-btn" onClick={onCancel} aria-label="Cancel">
+          <Icon name="x" />
+        </button>
+        <div className="area-hint">Tap the map to move the center</div>
+        <button className="icon-btn" disabled={!gps.pos} onClick={() => gps.pos && (setCenter(gps.pos), refit())} aria-label="Center on me">
+          <Icon name="crosshair" />
+        </button>
+      </div>
       <MapView
         boundary={draft}
-        pins={[]}
         me={gps.pos ? { pos: gps.pos, accuracy: gps.accuracy, role: null } : null}
         onMapClick={setCenter}
         fitKey={`area-${fitKey}`}
         className="area-map"
       />
-      <div className="area-hint">Tap the map to move the center</div>
 
       <div className="area-panel">
         <Segmented
@@ -76,35 +82,29 @@ export default function AreaEditor({ initial, onSave, onCancel }: {
           </>
         )}
 
-        <div className="btn-row">
-          <button className="btn btn-small" disabled={!gps.pos} onClick={() => gps.pos && (setCenter(gps.pos), refit())}>
-            Center on me
-          </button>
-          <button className="btn btn-small" onClick={refit}>
-            Zoom to area
-          </button>
-        </div>
-
         <details className="saved-areas">
-          <summary>Saved areas ({areas.length})</summary>
+          <summary>
+            <Icon name="pin" size={16} />
+            Saved areas ({areas.length})
+          </summary>
           {areas.map((a) => (
             <div key={a.name} className="saved-area">
               <div>
                 <b>{a.name}</b>
                 <small>{describeBoundary(a.boundary)}</small>
               </div>
-              <button className="btn btn-small" onClick={() => (setDraft(a.boundary), refit())}>
+              <button className="btn btn--sm" onClick={() => (setDraft(a.boundary), refit())}>
                 Load
               </button>
               <button className="icon-btn" aria-label={`Delete ${a.name}`} onClick={() => setAreas(deleteArea(a.name))}>
-                ✕
+                <Icon name="x" size={18} />
               </button>
             </div>
           ))}
-          <div className="join-row">
+          <div className="row">
             <input placeholder="Name this area" value={saveName} maxLength={30} onChange={(e) => setSaveName(e.target.value)} />
             <button
-              className="btn btn-small"
+              className="btn flex-none"
               disabled={!saveName.trim()}
               onClick={() => {
                 setAreas(saveArea(saveName.trim(), draft));
@@ -116,11 +116,13 @@ export default function AreaEditor({ initial, onSave, onCancel }: {
           </div>
         </details>
 
-        <div className="btn-row">
-          <button className="btn" onClick={onCancel}>
-            Cancel
+        <div className="row">
+          <button className="btn" onClick={refit}>
+            <Icon name="target" size={18} />
+            Fit
           </button>
-          <button className="btn btn-primary" onClick={() => onSave(draft)}>
+          <button className="btn btn--primary" style={{ flex: 2 }} onClick={() => onSave(draft)}>
+            <Icon name="check" />
             Use this area
           </button>
         </div>

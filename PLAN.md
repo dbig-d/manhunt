@@ -201,18 +201,14 @@ Visual style: **Night Ops** (dark tactical). Testing aids added in this phase: b
 - Results screen (basic stats) + Play again
 - ➜ **Playtest IRL with friends, then tune the defaults**
 
-### Phase 2 — Safe zones & coins
-- Remove the Phase 1 test bots (keep simulated GPS behind a dev-only switch)
-- Zone spawning with host settings, countdown rings, split-coin economy, zone ping-effect toggle
-
-### Phase 3 — Power-ups
-- Shop UI, all 8 hider items, host price/limit editor, optional seeker economy + 3 seeker items
-
-### Phase 4 — Social & extras
-- Team chat + quick pings
-- Movement recap on the results screen (then auto-delete)
-- Night Time mode, Storm (shrinking zone) mode
-- Polish: sounds, animations, onboarding/how-to-play screen
+### Phases 2–4 — built (with a full polish pass)
+- **Safe zones & coins:** zone spawning with host settings, countdown labels, split-coin economy, ping effect (alert seekers / blurry pings)
+- **Power-ups:** shop, all 8 hider items, host price/limit/on-off editor, optional seeker economy + 3 seeker items
+- **Social:** team chat per channel (lobby, seekers, hiders, spectators) + quick pings that drop a flag for teammates
+- **After the game:** animated movement recap with tags marked, deleted when the next round starts
+- **Modes:** Night Time (secret hider count, anonymous, darker map) and Storm (shrinking area)
+- **Polish:** new lobby setup flow (mode, area, players, rules), tabbed rules editor, icons, sounds, how-to-play, faster first load
+- **Still in for testing:** the bots and simulated GPS stay (tucked into menus) while you playtest on phones. **Remove the bots** once the new features are proven in real games.
 
 ### Phase 5 — Going public (later, optional)
 - Safety notice (watch for roads/traffic, play in agreed areas), basic rate limiting/abuse protection, optional accounts for stats, nicer map tier if worth it

@@ -78,6 +78,18 @@ export function boundaryRing(b: Boundary, steps = 72): LatLng[] {
   return corners;
 }
 
+/** The same shape, `factor` times the size, moved to `center`. */
+export function scaleBoundary(b: Boundary, factor: number, center: LatLng = b.center): Boundary {
+  return b.shape === "circle"
+    ? { ...b, center, radius: b.radius * factor }
+    : { ...b, center, width: b.width * factor, height: b.height * factor };
+}
+
+/** The point `t` of the way from a to b (t from 0 to 1). */
+export function lerp(a: LatLng, b: LatLng, t: number): LatLng {
+  return { lat: a.lat + (b.lat - a.lat) * t, lng: a.lng + (b.lng - a.lng) * t };
+}
+
 export function circleRing(center: LatLng, radius: number, steps = 48): LatLng[] {
   return boundaryRing({ shape: "circle", center, radius }, steps);
 }

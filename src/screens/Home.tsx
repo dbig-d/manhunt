@@ -1,5 +1,9 @@
 import { useState } from "react";
+import Icon from "../components/Icon";
+import TestingTools from "../components/TestingTools";
+import { Sheet } from "../components/ui";
 import { apiUrl } from "../lib/api";
+import HowToPlay from "./HowToPlay";
 
 const NAME_KEY = "mh:name";
 
@@ -9,6 +13,7 @@ export default function Home({ onEnter, error }: { onEnter: (code: string, name:
   const [code, setCode] = useState(() => new URLSearchParams(location.search).get("join")?.toUpperCase().slice(0, 4) ?? "");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const [sheet, setSheet] = useState<"howto" | "testing" | null>(null);
 
   const cleanName = name.trim();
   const remember = () => {
@@ -44,55 +49,96 @@ export default function Home({ onEnter, error }: { onEnter: (code: string, name:
     onEnter(code, cleanName);
   };
 
+  const shownError = problem ?? error;
+
   return (
-    <main className="home">
-      <div className="home-radar" aria-hidden="true">
-        <div className="home-sweep" />
-      </div>
-      <header className="home-head">
-        <div className="eyebrow">IRL hide &amp; seek</div>
+    <main className="home screen">
+      <header className="home-hero">
+        <div className="radar" aria-hidden="true">
+          <div className="radar-sweep" />
+          <span className="radar-blip" style={{ left: "66%", top: "30%" }} />
+          <span className="radar-blip" style={{ left: "28%", top: "64%", animationDelay: "-0.8s" }} />
+          <span className="radar-blip radar-blip--seeker" style={{ left: "52%", top: "52%" }} />
+        </div>
+        <div className="eyebrow">Real-life hide &amp; seek</div>
         <h1 className="logo">MANHUNT</h1>
+        <p className="tagline">Run. Hide. Get pinged.</p>
       </header>
 
-      <label className="field">
-        <span>Your name</span>
-        <input
-          value={name}
-          maxLength={16}
-          autoComplete="nickname"
-          placeholder="e.g. Maya"
-          onChange={(e) => setName(e.target.value)}
-        />
-      </label>
+      <section className="card home-card">
+        <label className="field">
+          <span>Your name</span>
+          <input
+            value={name}
+            maxLength={16}
+            autoComplete="nickname"
+            placeholder="e.g. Maya"
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && (code.length === 4 ? join() : create())}
+          />
+        </label>
 
-      <button className="btn btn-primary" disabled={busy} onClick={create}>
-        {busy ? "Creating…" : "Create game"}
-      </button>
+        {code.length === 4 && new URLSearchParams(location.search).has("join") ? (
+          <button className="btn btn--primary btn--big" onClick={join}>
+            Join room {code}
+          </button>
+        ) : (
+          <button className="btn btn--primary btn--big" disabled={busy} onClick={create}>
+            <Icon name="plus" />
+            {busy ? "Creating…" : "Create game"}
+          </button>
+        )}
 
-      <div className="divider">
-        <span>or join one</span>
-      </div>
+        <div className="divider">or join with a code</div>
 
-      <div className="join-row">
-        <input
-          className="code-input"
-          value={code}
-          maxLength={4}
-          placeholder="CODE"
-          autoCapitalize="characters"
-          autoComplete="off"
-          spellCheck={false}
-          onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))}
-          onKeyDown={(e) => e.key === "Enter" && join()}
-        />
-        <button className="btn" onClick={join}>
-          Join
+        <div className="row">
+          <input
+            className="code-input"
+            value={code}
+            maxLength={4}
+            placeholder="CODE"
+            aria-label="Room code"
+            autoCapitalize="characters"
+            autoComplete="off"
+            spellCheck={false}
+            onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))}
+            onKeyDown={(e) => e.key === "Enter" && join()}
+          />
+          <button className="btn flex-none" style={{ width: 96 }} onClick={join}>
+            Join
+          </button>
+        </div>
+
+        {shownError && (
+          <p className="form-error">
+            <Icon name="alert" size={18} />
+            {shownError}
+          </p>
+        )}
+      </section>
+
+      <nav className="home-links">
+        <button className="link-btn" onClick={() => setSheet("howto")}>
+          <Icon name="help" size={18} />
+          How to play
         </button>
-      </div>
+        <button className="link-btn" onClick={() => setSheet("testing")}>
+          <Icon name="wrench" size={18} />
+          Testing tools
+        </button>
+      </nav>
+      <p className="home-foot">Test build · Play outdoors, stay safe</p>
 
-      {(problem || error) && <p className="form-error">{problem ?? error}</p>}
-
-      <p className="home-foot">Phase 1 test build · Bots and simulated GPS available for testing</p>
+      {sheet === "howto" && (
+        <Sheet title="How to play" onClose={() => setSheet(null)}>
+          <HowToPlay />
+        </Sheet>
+      )}
+      {sheet === "testing" && (
+        <Sheet title="Testing tools" onClose={() => setSheet(null)}>
+          <TestingTools />
+        </Sheet>
+      )}
     </main>
   );
 }
