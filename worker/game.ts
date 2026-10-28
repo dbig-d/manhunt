@@ -16,6 +16,8 @@ import type {
   PlayerPublic,
   PlayerStats,
   PlayerStatus,
+  Recap,
+  RecapEvent,
   Results,
   Role,
   RoomView,
@@ -40,7 +42,11 @@ import {
 } from "../shared/settings";
 import { ITEM_BY_ID } from "../shared/items";
 import { MODE_BY_ID } from "../shared/modes";
-import { bearing, distance, insideBoundary, lerp, offset, randomPointInBoundary, scaleBoundary, toLocal } from "../shared/geo";
+import { bearing, distance, insideBoundary, offset, randomPointInBoundary, scaleBoundary, toLocal } from "../shared/geo";
+import { stormBoundary, stormProgress } from "../shared/storm";
+
+/** Omit that works across each member of a union (plain Omit merges them). */
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
 /** Power-up effects on a player. Timestamps are when they wear off (0 = not active). */
 interface Fx {
@@ -124,7 +130,14 @@ interface Flag {
   until: number;
 }
 
-type RecapTag = NonNullable<Results["recap"]>["tags"][number];
+/** What's being recorded during a game, for the replay. Times are ms; positions are recorded as meters. */
+interface Recording {
+  startedAt: number;
+  lastSampleAt: number | null;
+  tracks: Record<string, number[]>;
+  events: RecapEvent[];
+  zones: Recap["zones"];
+}
 
 export interface GameState {
   code: string;
@@ -151,10 +164,10 @@ export interface GameState {
   stormAnnounced: boolean;
   chat: ChatMessage[];
   flags: Flag[];
-  /** Movement recap: flat [x, y, seconds, ...] per player, meters from the play area's center. */
-  tracks: Record<string, number[]>;
-  lastTrackAt: number | null;
-  recapTags: RecapTag[];
+  /** The match being recorded right now (head start and hunt). */
+  recording: Recording | null;
+  /** The finished match's replay, kept for the results screen only. */
+  recap: Recap | null;
 }
 
 /**
@@ -182,9 +195,13 @@ const LOBBY_DROP_MS = 120_000;
 const HISTORY_STEP_MS = 2_000;
 const HISTORY_KEEP_MS = 45_000;
 const JAM_DELAY_MS = 30_000;
-const TRACK_EVERY_MS = 10_000;
-/** Older recap points get thinned out past this, to keep the saved room small. */
-const TRACK_MAX_POINTS = 150;
+/** Replay positions are sampled this often... */
+const TRACK_EVERY_MS = 5_000;
+/** ...and thinned out past this many points per player, to keep the saved room small. */
+const TRACK_MAX_POINTS = 240;
+const RECAP_MAX_EVENTS = 3_000;
+/** Nobody's looking at the results any more: delete the replay after this long. */
+const RECAP_ABANDONED_MS = 60_000;
 const CHAT_KEEP = 150;
 const CHAT_MAX_LEN = 200;
 const CHAT_COOLDOWN_MS = 500;
@@ -214,9 +231,14 @@ export class Game {
     st.stormAnnounced ??= false;
     st.chat ??= [];
     st.flags ??= [];
-    st.tracks ??= {};
-    st.lastTrackAt ??= null;
-    st.recapTags ??= [];
+    st.recording ??= null;
+    st.recap ??= null;
+    // Replay data from older versions is in a different shape; just drop it.
+    const old = st as GameState & { tracks?: unknown; lastTrackAt?: unknown; recapTags?: unknown };
+    delete old.tracks;
+    delete old.lastTrackAt;
+    delete old.recapTags;
+    if (st.results) delete (st.results as Results & { recap?: unknown }).recap;
     for (const p of st.players) {
       p.alias ??= makeId();
       p.coins ??= 0;
@@ -256,9 +278,8 @@ export class Game {
         stormAnnounced: false,
         chat: [],
         flags: [],
-        tracks: {},
-        lastTrackAt: null,
-        recapTags: [],
+        recording: null,
+        recap: null,
       },
       rand,
       makeId,
@@ -363,10 +384,53 @@ export class Game {
     const b = st.settings.boundary;
     const w = this.stormWindow();
     if (!b || !w || st.phase !== "hunt" || !st.stormCenter) return b;
-    const t = Math.min(1, Math.max(0, (now - w.start) / Math.max(1, w.end - w.start)));
-    if (t === 0) return b;
-    const factor = 1 - (1 - st.settings.storm.finalPct / 100) * t;
-    return scaleBoundary(b, factor, lerp(b.center, st.stormCenter, t));
+    return stormBoundary(b, st.stormCenter, st.settings.storm.finalPct, stormProgress(now, w.start, w.end));
+  }
+
+  // ---------- recording the match for the replay ----------
+
+  /** Seconds since the game started, as the replay counts time. */
+  private recT(now: number) {
+    const r = this.state.recording;
+    return r ? Math.round((now - r.startedAt) / 100) / 10 : 0;
+  }
+
+  /** Meters east/north of the play area's center, rounded to 1 m. */
+  private local(p: LatLng): [number, number] {
+    const { x, y } = toLocal(this.state.settings.boundary?.center ?? p, p);
+    return [Math.round(x), Math.round(y)];
+  }
+
+  /** Note something that happened, for the replay. */
+  private record(now: number, event: DistributiveOmit<RecapEvent, "t">) {
+    const r = this.state.recording;
+    if (!r || r.events.length >= RECAP_MAX_EVENTS) return;
+    r.events.push({ t: this.recT(now), ...event } as RecapEvent);
+  }
+
+  /** Add one position to a player's replay track (thinning out old points if it gets long). */
+  private samplePlayer(p: PlayerState, now: number) {
+    const r = this.state.recording;
+    if (!r || !p.pos) return;
+    const t = this.recT(now);
+    const track = (r.tracks[p.id] ??= []);
+    if (track.length && track[track.length - 1] >= t) return;
+    track.push(...this.local(p.pos), t);
+    if (track.length / 3 > TRACK_MAX_POINTS) {
+      // Keep every other point (and always the newest).
+      const thinned: number[] = [];
+      for (let i = 0; i < track.length - 3; i += 6) thinned.push(track[i], track[i + 1], track[i + 2]);
+      thinned.push(...track.slice(-3));
+      r.tracks[p.id] = thinned;
+    }
+  }
+
+  /** Every few seconds, note where everyone still in play is. */
+  private recordTracks(now: number) {
+    const r = this.state.recording;
+    if (!r) return;
+    r.lastSampleAt = now;
+    for (const p of this.state.players) if (p.startRole && p.status === "alive") this.samplePlayer(p, now);
   }
 
   private stormTarget(): Boundary | null {
@@ -446,8 +510,11 @@ export class Game {
     if (!p) return;
     if (this.state.phase === "lobby" || this.state.phase === "results") {
       this.removePlayer(id);
+      // Everyone's left the results: nobody will watch the replay, so delete it now.
+      if (!this.state.players.some((q) => !q.isBot && q.connected)) this.state.recap = null;
     } else {
       p.connected = false;
+      if (p.status === "alive") this.record(now, { kind: "left", playerId: p.id });
       if (p.status === "alive" && p.role === "hider") {
         p.status = "out";
         p.taggedAt = now;
@@ -483,6 +550,11 @@ export class Game {
       for (const p of [...this.state.players]) {
         if (!p.isBot && !p.connected && now - p.lastSeenAt > LOBBY_DROP_MS) this.removePlayer(p.id);
       }
+    }
+    // Everyone closed the results screen a while ago: delete the replay and its location history.
+    if (this.state.recap) {
+      const humans = this.state.players.filter((p) => !p.isBot);
+      if (humans.every((p) => !p.connected && now - p.lastSeenAt > RECAP_ABANDONED_MS)) this.state.recap = null;
     }
   }
 
@@ -652,12 +724,13 @@ export class Game {
     st.stormCenter = null;
     st.stormAnnounced = false;
     st.flags = [];
-    st.tracks = {};
-    st.lastTrackAt = null;
-    st.recapTags = [];
+    // A new game: the last replay (and its location history) is deleted, and recording starts.
+    st.recap = null;
+    st.recording = { startedAt: now, lastSampleAt: null, tracks: {}, events: [], zones: [] };
     st.phase = "headstart";
     st.phaseEndsAt = now + s.headStartSec * 1000;
     this.emit("all", { kind: "phase", phase: "headstart" });
+    this.recordTracks(now);
     if (s.headStartSec === 0) this.beginHunt(now);
   }
 
@@ -668,6 +741,7 @@ export class Game {
     st.huntStartedAt = now;
     st.phaseEndsAt = now + s.gameLengthMin * 60_000;
     this.emit("all", { kind: "phase", phase: "hunt" });
+    this.record(now, { kind: "hunt" });
     if (s.storm.enabled && s.boundary) {
       // Anywhere the final, smaller area still fits inside the original one.
       st.stormCenter = randomPointInBoundary(scaleBoundary(s.boundary, 1 - s.storm.finalPct / 100), 0, this.rand);
@@ -680,7 +754,6 @@ export class Game {
       st.nextSeekerPingAt = now + s.hiderViewIntervalSec * 1000;
     }
     if (s.tagMode === "qr") this.rotateTagCodes(now);
-    this.recordTracks(now);
   }
 
   private doPing(now: number) {
@@ -708,6 +781,7 @@ export class Game {
       p.ping = { pos, at, fuzzCenter, radius };
     }
     this.emit("all", { kind: "ping" });
+    this.record(now, { kind: "ping" });
   }
 
   private decoyPoint(from: LatLng, now: number): LatLng {
@@ -776,11 +850,14 @@ export class Game {
       if (storm && !st.stormAnnounced && now >= storm.start) {
         st.stormAnnounced = true;
         this.emit("all", { kind: "storm" });
+        this.record(now, { kind: "storm" });
       }
       this.tickZones(dt, now);
-      if (st.lastTrackAt === null || now - st.lastTrackAt >= TRACK_EVERY_MS) this.recordTracks(now);
     }
     st.flags = st.flags.filter((f) => f.until > now);
+    // The replay records the head start too, so you can watch the hiders scatter.
+    const rec = st.recording;
+    if (rec && (rec.lastSampleAt === null || now - rec.lastSampleAt >= TRACK_EVERY_MS)) this.recordTracks(now);
 
     this.checkBounds(now);
     if (st.phase === "hunt") this.botTags(now);
@@ -831,30 +908,11 @@ export class Game {
       if (st.zones.every((o) => distance(o.center, center) > o.radius + radius + 10)) break;
       center = randomPointInBoundary(area, radius + 5, this.rand);
     }
-    st.zones.push({ id: this.nextId("z"), center, radius, spawnedAt: now, endsAt: now + st.settings.zones.durationSec * 1000, alertUntil: 0 });
+    const endsAt = now + st.settings.zones.durationSec * 1000;
+    st.zones.push({ id: this.nextId("z"), center, radius, spawnedAt: now, endsAt, alertUntil: 0 });
     this.emit("all", { kind: "zone", what: "spawn" });
-  }
-
-  /** Every 10 s, note where everyone is for the movement recap. */
-  private recordTracks(now: number) {
-    const st = this.state;
-    const origin = st.settings.boundary?.center;
-    if (!origin || st.huntStartedAt === null) return;
-    st.lastTrackAt = now;
-    const t = Math.round((now - st.huntStartedAt) / 1000);
-    for (const p of st.players) {
-      if (!p.startRole || p.status !== "alive" || !p.pos) continue;
-      const { x, y } = toLocal(origin, p.pos);
-      const track = (st.tracks[p.id] ??= []);
-      track.push(Math.round(x), Math.round(y), t);
-      if (track.length / 3 > TRACK_MAX_POINTS) {
-        // Thin out: keep every other point (and always the newest).
-        const thinned: number[] = [];
-        for (let i = 0; i < track.length; i += 6) thinned.push(track[i], track[i + 1], track[i + 2]);
-        if (thinned[thinned.length - 1] !== t) thinned.push(Math.round(x), Math.round(y), t);
-        st.tracks[p.id] = thinned;
-      }
-    }
+    const [x, y] = this.local(center);
+    st.recording?.zones.push({ x, y, r: radius, from: this.recT(now), to: this.recT(endsAt) });
   }
 
   private checkBounds(now: number) {
@@ -964,10 +1022,12 @@ export class Game {
   private tag(hider: PlayerState, byId: string | null, reason: "tag" | "oob", now: number) {
     if (hider.status !== "alive" || hider.role !== "hider") return;
     const st = this.state;
-    const origin = st.settings.boundary?.center;
-    if (origin && hider.pos && st.huntStartedAt !== null) {
-      const { x, y } = toLocal(origin, hider.pos);
-      st.recapTags.push({ t: Math.round((now - st.huntStartedAt) / 1000), x: Math.round(x), y: Math.round(y), playerId: hider.id, byId });
+    // For the replay: their exact last spot, and the moment it happened.
+    this.samplePlayer(hider, now);
+    if (hider.pos) {
+      const [x, y] = this.local(hider.pos);
+      const converted = st.settings.whenTagged === "seeker";
+      this.record(now, { kind: "tag", playerId: hider.id, byId: byId && this.player(byId) ? byId : null, x, y, converted, oob: reason === "oob" });
     }
     hider.taggedAt = now;
     hider.taggedBy = byId;
@@ -1041,6 +1101,7 @@ export class Game {
     if (cfg.limit > 0 && used >= cfg.limit) throw new GameError(`You've used all your ${info.name} charges`);
     if (me.coins + 1e-9 < cfg.price) throw new GameError(`You need ${cfg.price} coins for ${info.name}`);
     this.useItem(me, item, targetId, now); // may refuse before charging
+    this.record(now, { kind: "item", playerId: me.id, item });
     me.coins -= cfg.price;
     me.uses[item] = used + 1;
     this.emit({ playerId: me.id }, { kind: "item", item, mine: true });
@@ -1114,6 +1175,8 @@ export class Game {
     target.fx = noFx();
     if (this.state.settings.tagMode === "qr") target.tagCode = this.freshTagCode();
     this.remember(target, now);
+    this.record(now, { kind: "revive", playerId: target.id });
+    this.samplePlayer(target, now);
     this.emit(this.state.settings.secretCount ? { ids: [target.id], alsoChannel: "hiders" } : "all", { kind: "revived", playerId: target.id });
   }
 
@@ -1155,7 +1218,8 @@ export class Game {
 
   private finish(reason: Results["reason"], now: number) {
     const st = this.state;
-    if (st.phase === "hunt") this.recordTracks(now);
+    // One last sample so everyone's dot ends exactly where they were.
+    if (st.recording) for (const p of st.players) if (p.startRole && p.status === "alive") this.samplePlayer(p, now);
     const huntStart = st.huntStartedAt;
     const aliveHiders = this.aliveHiders().length;
     const winner: Results["winner"] =
@@ -1196,15 +1260,9 @@ export class Game {
     const banker = most("coinsEarned");
     if (banker) awards.push({ title: "Moneybags", playerId: banker.id, detail: `${banker.coinsEarned} coins collected` });
 
-    const origin = st.settings.boundary?.center;
-    st.results = {
-      winner,
-      reason,
-      durationMs: huntStart === null ? 0 : now - huntStart,
-      stats,
-      awards,
-      recap: origin && huntStart !== null ? { origin, tracks: st.tracks, tags: st.recapTags } : null,
-    };
+    st.results = { winner, reason, durationMs: huntStart === null ? 0 : now - huntStart, stats, awards };
+    st.recap = this.buildRecap(winner, now);
+    st.recording = null;
     st.phase = "results";
     st.phaseEndsAt = null;
     st.nextPingAt = null;
@@ -1221,6 +1279,32 @@ export class Game {
       p.zoneId = null;
     }
     this.emit("all", { kind: "phase", phase: "results" });
+  }
+
+  /** Package the recording as the replay shown on the results screen. */
+  private buildRecap(winner: Results["winner"], now: number): Recap | null {
+    const st = this.state;
+    const r = st.recording;
+    const b = st.settings.boundary;
+    if (!r || !b) return null;
+    const durationS = this.recT(now);
+    const storm = this.stormWindow();
+    return {
+      id: this.nextId("r"),
+      origin: b.center,
+      boundary: b,
+      durationS,
+      huntStartS: st.huntStartedAt === null ? null : this.recT(st.huntStartedAt),
+      winner,
+      players: st.players.filter((p) => p.startRole).map((p) => ({ id: p.id, name: p.name, isBot: p.isBot, startRole: p.startRole! })),
+      tracks: r.tracks,
+      events: r.events,
+      zones: r.zones.map((z) => ({ ...z, to: Math.min(z.to, durationS) })),
+      storm:
+        storm && st.stormCenter
+          ? { center: st.stormCenter, startS: this.recT(storm.start), endS: this.recT(storm.end), finalPct: st.settings.storm.finalPct }
+          : null,
+    };
   }
 
   playAgain(id: string) {
@@ -1241,10 +1325,9 @@ export class Game {
       p.fx = noFx();
     }
     st.phase = "lobby";
-    // The recap has been shown; location history goes with it.
+    // The replay has been shown; its location history goes with it.
     st.results = null;
-    st.tracks = {};
-    st.recapTags = [];
+    st.recap = null;
     st.huntStartedAt = null;
     st.stormCenter = null;
     if (!this.player(st.hostId ?? "")) this.handOverHost();
@@ -1424,6 +1507,7 @@ export class Game {
       nextSeekerPingAt:
         s.hiderView !== "pinged" ? null : hunting ? st.nextSeekerPingAt : st.phase === "headstart" ? st.phaseEndsAt : null,
       results: st.results,
+      recapId: st.recap?.id ?? null,
     };
   }
 }

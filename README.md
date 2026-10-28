@@ -40,12 +40,18 @@ Open http://localhost:5173.
 | `npm run deploy` | Builds and publishes the game server to Cloudflare (needs `npx wrangler login` first) |
 | `npm run build:pages` | Builds just the website the way GitHub Pages serves it |
 
+## Phones
+
+- **Works on:** iPhone with iOS 16 or newer (Safari, Chrome, or added to the home screen) and Android (Chrome, Samsung Internet). Older iPhones get a message on the home screen instead of a game that won't load.
+- **Location:** the lobby has a *Turn on your location* step. Tap **Allow location** and say yes. If it's been blocked, the card shows the exact steps for that phone and browser. On iPhone that's *Settings → Privacy & Security → Location Services → Safari Websites → While Using the App*, with **Precise Location** on.
+- **Opened from Instagram/Snapchat?** Their built-in browsers often can't share location. Open the link in Safari or Chrome.
+
 ## Themes
 
 Tap **Theme** on the home screen (or *Appearance* in any menu) to switch between Dark, Gray and Light, and pick one of 10 accent colors. The choice is saved on each phone. Hider green and seeker red never change, so teams always look the same. The colors live in `src/index.css` (top of the file) and `src/lib/theme.ts`.
 
 ## How it's put together
 
-- `src/` is the website (React). `screens/` holds each screen (lobby, rules editor, game, shop, chat, results), `components/MapView.tsx` is the map, and `index.css` is the whole Night Ops design.
+- `src/` is the website (React). `screens/` holds each screen (lobby, rules editor, game, shop, chat, results and the match replay in `Replay.tsx`), `components/MapView.tsx` is the map, and `index.css` is the whole Night Ops design.
 - `worker/` is the server. `game.ts` holds all the game rules; `room.ts` is the live game room each phone connects to.
 - `shared/` holds code both sides use: message types, settings, game modes (`modes.ts`), power-ups (`items.ts`) and map maths.

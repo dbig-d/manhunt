@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { CrashScreen } from "./components/CrashScreen";
 import { GpsProvider } from "./lib/location";
 import { forgetRoom } from "./lib/useRoom";
 import Home from "./screens/Home";
@@ -54,17 +55,20 @@ function Main() {
 
   if (!session) return <Home onEnter={enter} error={error} />;
   return (
-    <Suspense
-      fallback={
-        <main className="loading">
-          <div className="radar" aria-hidden="true">
-            <div className="radar-sweep" />
-          </div>
-          <p>Loading…</p>
-        </main>
-      }
-    >
-      <RoomScreen key={session.code} session={session} onExit={exit} />
-    </Suspense>
+    // If the room screens fail to load (old browser, bad connection), say so instead of hanging.
+    <CrashScreen onReset={() => exit(null)}>
+      <Suspense
+        fallback={
+          <main className="loading">
+            <div className="radar" aria-hidden="true">
+              <div className="radar-sweep" />
+            </div>
+            <p>Loading…</p>
+          </main>
+        }
+      >
+        <RoomScreen key={session.code} session={session} onExit={exit} />
+      </Suspense>
+    </CrashScreen>
   );
 }

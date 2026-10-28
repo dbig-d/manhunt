@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ChatMessage, ClientMessage, GameEvent, RoomView, ServerMessage } from "../../shared/protocol";
+import type { ChatMessage, ClientMessage, GameEvent, Recap, RoomView, ServerMessage } from "../../shared/protocol";
 import { wsUrl } from "./api";
 
 export type ConnectionStatus = "connecting" | "open" | "reconnecting" | "closed";
@@ -17,6 +17,8 @@ export function useRoom(code: string | null, name: string) {
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [fatal, setFatal] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  /** The finished match's replay. Dropped as soon as the server deletes it (next game, or everyone left). */
+  const [recap, setRecap] = useState<Recap | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const offsetRef = useRef(0);
   const listeners = useRef(new Set<Listener>());
@@ -32,6 +34,7 @@ export function useRoom(code: string | null, name: string) {
     setView(null);
     setFatal(null);
     setMessages([]);
+    setRecap(null);
     setStatus("connecting");
 
     const emit: Listener = (e) => listeners.current.forEach((fn) => fn(e));
@@ -64,6 +67,10 @@ export function useRoom(code: string | null, name: string) {
           case "state":
             offsetRef.current = msg.now - Date.now();
             setView(msg.view);
+            if (!msg.view.recapId) setRecap(null);
+            break;
+          case "recap":
+            setRecap(msg.recap);
             break;
           case "chatHistory":
             addMessages(msg.messages);
@@ -119,7 +126,7 @@ export function useRoom(code: string | null, name: string) {
 
   const serverNow = useCallback(() => Date.now() + offsetRef.current, []);
 
-  return { view, status, fatal, send, subscribe, serverNow, messages };
+  return { view, status, fatal, send, subscribe, serverNow, messages, recap };
 }
 
 export type Room = ReturnType<typeof useRoom>;

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import Appearance from "../components/Appearance";
+import { tooOld } from "../components/CrashScreen";
 import Icon from "../components/Icon";
 import TestingTools from "../components/TestingTools";
 import { Sheet } from "../components/ui";
@@ -15,6 +16,7 @@ export default function Home({ onEnter, error }: { onEnter: (code: string, name:
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [sheet, setSheet] = useState<"howto" | "testing" | "appearance" | null>(null);
+  const [tooOldMessage] = useState(tooOld);
 
   const cleanName = name.trim();
   const remember = () => {
@@ -69,6 +71,13 @@ export default function Home({ onEnter, error }: { onEnter: (code: string, name:
         <h1 className="logo">MANHUNT</h1>
         <p className="tagline">Run. Hide. Get pinged.</p>
       </header>
+
+      {tooOldMessage && (
+        <p className="form-error">
+          <Icon name="alert" size={18} />
+          {tooOldMessage}
+        </p>
+      )}
 
       <section className="card home-card">
         <label className="field">

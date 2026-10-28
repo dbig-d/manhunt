@@ -22,6 +22,9 @@ export class GameRoom extends DurableObject<Env> {
   private lastSavedAt = 0;
   /** The last view sent to each phone, so unchanged views aren't sent again (saves data and battery). */
   private lastSent = new WeakMap<WebSocket, string>();
+  /** The replay is big, so each phone gets it once, and it's only turned into text once. */
+  private sentRecap = new WeakMap<WebSocket, string>();
+  private recapJson: { id: string; json: string } | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -79,6 +82,7 @@ export class GameRoom extends DurableObject<Env> {
         }
         ws.serializeAttachment({ playerId: p.id } satisfies Attachment);
         this.lastSent.delete(ws);
+        this.sentRecap.delete(ws);
         this.send(ws, { type: "welcome", playerId: p.id, token: p.token });
         this.send(ws, { type: "chatHistory", messages: game.chatHistory(p.id) });
       } else if (!playerId || !game.player(playerId)) {
@@ -227,10 +231,22 @@ export class GameRoom extends DurableObject<Env> {
 
     const outbox = game.outbox;
     game.outbox = [];
+    const recap = game.state.recap;
+    if (recap && this.recapJson?.id !== recap.id) this.recapJson = { id: recap.id, json: `{"type":"recap","recap":${JSON.stringify(recap)}}` };
+    if (!recap) this.recapJson = null;
     for (const ws of this.sockets()) {
       const id = this.playerOf(ws);
       const p = id ? game.player(id) : undefined;
       if (!p) continue;
+      // The replay goes first, so it's ready by the time the results screen shows.
+      if (this.recapJson && this.sentRecap.get(ws) !== this.recapJson.id) {
+        this.sentRecap.set(ws, this.recapJson.id);
+        try {
+          ws.send(this.recapJson.json);
+        } catch {
+          // connection went away
+        }
+      }
       // Skip phones whose view hasn't changed since last time.
       const view = JSON.stringify(game.view(p.id, now));
       if (this.lastSent.get(ws) !== view) {

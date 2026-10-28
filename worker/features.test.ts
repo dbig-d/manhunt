@@ -221,16 +221,78 @@ describe("modes", () => {
   });
 });
 
-describe("movement recap", () => {
-  it("records everyone's path, then forgets it after Play again", () => {
+describe("match replay", () => {
+  const times = (track: number[]) => track.filter((_, i) => i % 3 === 2);
+
+  it("records everyone from the start of the head start, every 5 s, plus the hunt and pings", () => {
     const { game, host, h1 } = setup();
     run(game, T0, HUNT + 60_000);
     game.endGame(host.id, HUNT + 60_000);
-    const recap = game.state.results!.recap!;
-    expect(recap.tracks[h1.id].length / 3).toBeGreaterThanOrEqual(6);
+    const recap = game.state.recap!;
+    expect(recap.huntStartS).toBe(60);
+    expect(recap.durationS).toBe(120);
+    const t = times(recap.tracks[h1.id]);
+    expect(t[0]).toBe(0); // the head start is in there
+    expect(t.slice(0, 4)).toEqual([0, 5, 10, 15]);
+    expect(t[t.length - 1]).toBe(120);
+    expect(recap.events.filter((e) => e.kind === "hunt").map((e) => e.t)).toEqual([60]);
+    expect(recap.events.filter((e) => e.kind === "ping").length).toBe(2); // at 60 s and 120 s
+    expect(recap.players.map((p) => [p.name, p.startRole])).toEqual([["Hana", "seeker"], ["Ivan", "hider"], ["Jo", "hider"]]);
+    expect(game.view(host.id, HUNT + 61_000).recapId).toBe(recap.id);
+  });
+
+  it("records tags where they happened, and whether the hider switched sides", () => {
+    const { game, host, h1 } = setup({ mode: "infection" });
+    run(game, T0, HUNT + 10_000);
+    game.tagSelf(h1.id, host.id, HUNT + 12_000);
+    game.endGame(host.id, HUNT + 20_000);
+    const tag = game.state.recap!.events.find((e) => e.kind === "tag")!;
+    expect(tag).toMatchObject({ t: 72, playerId: h1.id, byId: host.id, converted: true, oob: false });
+    // Their track has a point at the exact moment of the tag, then carries on as a seeker.
+    const t = times(game.state.recap!.tracks[h1.id]);
+    expect(t).toContain(72);
+    expect(t[t.length - 1]).toBe(80);
+  });
+
+  it("records safe zones opening and closing, the storm, and power-ups", () => {
+    const { game, host, h1 } = setup({ mode: "storm", gameLengthMin: 4, zones: { everySec: 60, durationSec: 60 } });
+    run(game, T0, HUNT + 30_000);
+    game.player(h1.id)!.coins = 50;
+    game.buy(h1.id, "radar", undefined, HUNT + 31_000);
+    run(game, HUNT + 30_000, HUNT + 120_000);
+    game.endGame(host.id, HUNT + 120_000);
+    const recap = game.state.recap!;
+    expect(recap.zones[0]).toMatchObject({ from: 90, to: 150, r: 20 });
+    expect(recap.storm).toMatchObject({ startS: 120, finalPct: 35 });
+    expect(recap.storm!.endS).toBeCloseTo(60 + 240 * 0.9, 1);
+    expect(recap.events.some((e) => e.kind === "item" && e.item === "radar" && e.playerId === h1.id)).toBe(true);
+  });
+
+  it("is deleted when the next game starts", () => {
+    const { game, host } = setup();
+    run(game, T0, HUNT);
+    game.endGame(host.id, HUNT);
+    expect(game.state.recap).not.toBeNull();
     game.playAgain(host.id);
-    expect(game.state.tracks).toEqual({});
-    expect(game.state.results).toBeNull();
+    expect(game.state.recap).toBeNull();
+    expect(game.view(host.id, HUNT + 1000).recapId).toBeNull();
+  });
+
+  it("is deleted when everyone leaves the results, or abandons them", () => {
+    const a = setup();
+    run(a.game, T0, HUNT);
+    a.game.endGame(a.host.id, HUNT);
+    for (const p of [a.host, a.h1, a.h2]) a.game.leave(p.id, HUNT + 5000);
+    expect(a.game.state.recap).toBeNull();
+
+    const b = setup();
+    run(b.game, T0, HUNT);
+    b.game.endGame(b.host.id, HUNT);
+    for (const p of [b.host, b.h1, b.h2]) b.game.disconnect(p.id, HUNT + 1000);
+    b.game.housekeeping(HUNT + 30_000);
+    expect(b.game.state.recap).not.toBeNull(); // they might just be reconnecting
+    b.game.housekeeping(HUNT + 70_000);
+    expect(b.game.state.recap).toBeNull();
   });
 });
 

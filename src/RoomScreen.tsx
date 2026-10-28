@@ -119,7 +119,7 @@ export default function RoomScreen({ session, onExit }: { session: Session; onEx
       ) : view.phase === "lobby" ? (
         <Lobby view={view} now={now} send={send} onLeave={leave} messages={messages} />
       ) : view.phase === "results" ? (
-        <Results view={view} send={send} onLeave={leave} />
+        <Results view={view} recap={room.recap} send={send} onLeave={leave} />
       ) : (
         <GameScreen room={room} view={view} now={now} onLeave={leave} />
       )}

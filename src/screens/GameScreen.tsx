@@ -3,6 +3,7 @@ import type { PlayerPublic, RoomView } from "../../shared/protocol";
 import { ITEM_BY_ID } from "../../shared/items";
 import Appearance from "../components/Appearance";
 import Icon, { ITEM_ICON, type IconName } from "../components/Icon";
+import LocationCard, { LocationHelp } from "../components/LocationCard";
 import MapView from "../components/MapView";
 import TestingTools from "../components/TestingTools";
 import { Avatar, Sheet, SettingRow, Toggle } from "../components/ui";
@@ -21,7 +22,7 @@ import Shop from "./Shop";
 const TagCodeCard = lazy(() => import("../components/TagCode").then((m) => ({ default: m.TagCodeCard })));
 const TagScanner = lazy(() => import("../components/TagCode").then((m) => ({ default: m.TagScanner })));
 
-type SheetName = "menu" | "players" | "chat" | "shop" | "tagSelf" | "tagCode" | "scan" | "bots" | "howto" | "testing" | "appearance" | null;
+type SheetName = "menu" | "players" | "chat" | "shop" | "tagSelf" | "tagCode" | "scan" | "bots" | "howto" | "testing" | "appearance" | "location" | null;
 const GPS_LOST_MS = 30_000;
 
 interface Banner {
@@ -198,8 +199,12 @@ export default function GameScreen({ room, view, now, onLeave }: { room: Room; v
     }
   }
   if (me.zoneId && isHider) banners.push({ priority: 4, tone: "zone", icon: "coin", text: "In a safe zone", sub: `Earning coins · ${s.zones.coinsPerMin}/min, shared` });
-  if (gpsLost)
-    banners.push({ priority: 2, tone: "warn", icon: "signalOff", text: "Location lost", sub: gps.error ?? "Keep this page open with the screen on", action: { label: "Simulate", run: () => gps.setSimulated(true) } });
+  if (gps.status === "needs-permission" || gps.status === "asking")
+    banners.push({ priority: 1, tone: "danger", icon: "pin", text: "Turn on your location", sub: "You're not on the map until you do", action: { label: "Allow", run: gps.request } });
+  else if (gps.status === "denied" || gps.status === "unavailable")
+    banners.push({ priority: 1, tone: "danger", icon: "signalOff", text: "Location is blocked", sub: "Nobody can see you, and you can't be pinged", action: { label: "Fix", run: () => setSheet("location") } });
+  else if (gpsLost)
+    banners.push({ priority: 2, tone: "warn", icon: "signalOff", text: "Location lost", sub: gps.error ?? "Keep this page open with the screen on", action: { label: "Help", run: () => setSheet("location") } });
   else if (meP?.stale) banners.push({ priority: 2, tone: "warn", icon: "signalOff", text: "Your location isn't updating", sub: "Other players can see that" });
   if (keepAwake.needsTap) banners.push({ priority: 8, tone: "warn", icon: "sound", text: "Screen may turn off", sub: "Tap to keep it on, so your location keeps sending", action: { label: "Keep on", run: keepAwake.enable } });
   if (compass.status === "needs-permission") banners.push({ priority: 9, tone: "info", icon: "compass", text: "Turn on your compass", sub: "Shows which way you're facing", action: { label: "Enable", run: () => (compass.request(), keepAwake.enable()) } });
@@ -461,6 +466,18 @@ export default function GameScreen({ room, view, now, onLeave }: { room: Room; v
       {sheet === "appearance" && (
         <Sheet title="Appearance" onClose={() => setSheet(null)}>
           <Appearance />
+        </Sheet>
+      )}
+      {sheet === "location" && (
+        <Sheet title="Location" onClose={() => setSheet(null)}>
+          <LocationCard />
+          {gps.status === "on" && <p>Location is on, but updates stopped. Keep Manhunt open with the screen on: phones pause location for pages in the background.</p>}
+          {gps.status === "searching" && (
+            <>
+              <p>Still looking for a GPS signal. Head outside, away from tall buildings. If it never arrives:</p>
+              <LocationHelp />
+            </>
+          )}
         </Sheet>
       )}
 

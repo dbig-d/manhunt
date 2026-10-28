@@ -1,9 +1,9 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { LngLatBounds, Map as MlMap, Marker as MlMarker, setWorkerUrl, type GeoJSONSource } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-// MapLibre finds its background worker next to its own file, which breaks once Vite
-// bundles it, so tell it exactly where the worker is.
-import mapWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
+// MapLibre's background worker, rebuilt by Vite (see map-worker.ts) so older iPhones
+// can run it. MapLibre would look for it next to its own file, so we tell it where it is.
+import mapWorkerUrl from "../map-worker.ts?worker&url";
 import type * as GeoJSON from "geojson";
 import type { Boundary, LatLng, Marker, Role, ZoneView } from "../../shared/protocol";
 import { boundaryRing, circleRing } from "../../shared/geo";
@@ -172,6 +172,30 @@ function recolor(map: MlMap, mode: ThemeMode) {
   }
 }
 
+/** A map with our theme's base style, tuned to be light on phones. Shared with the replay. */
+export function createThemedMap(container: HTMLElement, mode: ThemeMode, center: LatLng, zoom = 16): MlMap {
+  const map = new MlMap({
+    container,
+    style: STYLE_URL[mode],
+    center: [center.lng, center.lat],
+    zoom,
+    attributionControl: { compact: true },
+    pitchWithRotate: false,
+    // Lighter on phones: 3× screens draw at 2×, and tiles appear without fading in.
+    pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
+    fadeDuration: 0,
+  });
+  // The dark style references a texture it doesn't ship; give it a blank one.
+  map.on("styleimagemissing", (e) => {
+    if (!map.hasImage(e.id)) map.addImage(e.id, { width: 1, height: 1, data: new Uint8Array(4) });
+  });
+  // "style.load" fires as soon as the style is ready, without waiting for every tile.
+  map.once("style.load", () => recolor(map, mode));
+  return map;
+}
+
+export { MAP_THEME };
+
 /** Keeps a set of HTML markers in sync with a list, creating and removing as needed. */
 function syncMarkers<T extends { id: string; lat: number; lng: number }>(
   map: MlMap,
@@ -239,27 +263,11 @@ function MapView({
   // Create the map once.
   useEffect(() => {
     const start = initial.current.boundary?.center ?? initial.current.me?.pos ?? DEFAULT_CENTER;
-    const map = new MlMap({
-      container: container.current!,
-      style: STYLE_URL[theme.mode],
-      center: [start.lng, start.lat],
-      zoom: 16,
-      attributionControl: { compact: true },
-      pitchWithRotate: false,
-      // Lighter on phones: 3× screens draw at 2×, and tiles appear without fading in.
-      pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
-      fadeDuration: 0,
-    });
+    const map = createThemedMap(container.current!, theme.mode, start);
     mapRef.current = map;
     // Handles for poking at the map from the browser console while developing.
     if (import.meta.env.DEV) Object.assign(window, { __mhMap: map, __mhMarkers: pinMarkers.current });
-    // The dark style references a texture it doesn't ship; give it a blank one.
-    map.on("styleimagemissing", (e) => {
-      if (!map.hasImage(e.id)) map.addImage(e.id, { width: 1, height: 1, data: new Uint8Array(4) });
-    });
-    // "style.load" fires as soon as the style is ready, without waiting for every tile.
     map.once("style.load", () => {
-      recolor(map, theme.mode);
       const empty = featureCollection([]);
       for (const id of ["mh-outside", "mh-boundary", "mh-storm", "mh-zones", "mh-lines", "mh-fuzzy", "mh-accuracy"]) {
         map.addSource(id, { type: "geojson", data: empty });

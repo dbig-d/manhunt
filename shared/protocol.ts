@@ -223,8 +223,37 @@ export interface Results {
   durationMs: number;
   stats: PlayerStats[];
   awards: Award[];
-  /** Movement recap: everyone's path as flat [eastMeters, northMeters, seconds, ...] from `origin`. */
-  recap: { origin: LatLng; tracks: Record<string, number[]>; tags: { t: number; x: number; y: number; playerId: string; byId: string | null }[] } | null;
+}
+
+/** Something that happened during the match, at `t` seconds after the game started. */
+export type RecapEvent =
+  | { t: number; kind: "hunt" }
+  | { t: number; kind: "ping" }
+  | { t: number; kind: "storm" }
+  | { t: number; kind: "tag"; playerId: string; byId: string | null; x: number; y: number; converted: boolean; oob: boolean }
+  | { t: number; kind: "revive"; playerId: string }
+  | { t: number; kind: "left"; playerId: string }
+  | { t: number; kind: "item"; playerId: string; item: ItemId };
+
+/**
+ * The whole match, for the replay on the results screen. Positions are meters east (x)
+ * and north (y) of `origin`; times are seconds since the game started (head start included).
+ * Sent once when the game ends, and deleted when the next game starts or everyone leaves.
+ */
+export interface Recap {
+  id: string;
+  origin: LatLng;
+  boundary: Boundary;
+  durationS: number;
+  /** When the head start ended (null if the game ended before the hunt). */
+  huntStartS: number | null;
+  winner: Results["winner"];
+  players: { id: string; name: string; isBot: boolean; startRole: Role }[];
+  /** Flat [x, y, t, x, y, t, …] per player, sampled every few seconds while they're in play. */
+  tracks: Record<string, number[]>;
+  events: RecapEvent[];
+  zones: { x: number; y: number; r: number; from: number; to: number }[];
+  storm: { center: LatLng; startS: number; endS: number; finalPct: number } | null;
 }
 
 export interface ChatMessage {
@@ -262,6 +291,8 @@ export interface RoomView {
   /** hiderView "pinged": when seeker locations are next sent to hiders. */
   nextSeekerPingAt: number | null;
   results: Results | null;
+  /** The replay waiting on the results screen (its data comes in a separate "recap" message). */
+  recapId: string | null;
 }
 
 export type ClientMessage =
@@ -300,5 +331,6 @@ export type ServerMessage =
   | { type: "welcome"; playerId: string; token: string }
   | { type: "state"; now: number; view: RoomView }
   | { type: "chatHistory"; messages: ChatMessage[] }
+  | { type: "recap"; recap: Recap }
   | { type: "event"; event: GameEvent }
   | { type: "error"; message: string; fatal?: boolean };

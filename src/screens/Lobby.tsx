@@ -3,6 +3,7 @@ import type { ChatMessage, ClientMessage, PlayerPublic, Role, RoomView, Settings
 import { MODES, MODE_BY_ID, isCustomized } from "../../shared/modes";
 import Appearance from "../components/Appearance";
 import Icon, { MODE_ICON, type IconName } from "../components/Icon";
+import LocationCard from "../components/LocationCard";
 import MapView from "../components/MapView";
 import TestingTools from "../components/TestingTools";
 import { Avatar, Segmented, Sheet, Stepper } from "../components/ui";
@@ -124,6 +125,8 @@ export default function Lobby({
           Invite players
         </button>
       </section>
+
+      <LocationCard />
 
       {/* 1 · Mode */}
       <section className="card step">

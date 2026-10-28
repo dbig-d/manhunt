@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import media from "nosleep.js/src/media.js";
+import { iosVersion, isHomeScreenApp, isIOS } from "./platform";
 
 // Keeping the screen on is what keeps the phone sending its location.
 //
@@ -12,16 +13,6 @@ import media from "nosleep.js/src/media.js";
 // on every touch until the right one is running.
 
 export type KeepAwakeMethod = "wake-lock" | "video" | null;
-
-const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-const isHomeScreenApp = () =>
-  (navigator as Navigator & { standalone?: boolean }).standalone === true || matchMedia("(display-mode: standalone)").matches;
-
-/** iOS version from the browser's description of itself, e.g. 18.3 (Infinity if unknown). */
-function iosVersion() {
-  const m = /OS (\d+)_(\d+)/.exec(navigator.userAgent);
-  return m ? Number(m[1]) + Number(m[2]) / 10 : Infinity;
-}
 
 /** The wake lock can't be trusted on its own here, so the video runs as well. */
 const wakeLockUnreliable = () => !("wakeLock" in navigator) || (isIOS() && isHomeScreenApp() && iosVersion() < 18.4);

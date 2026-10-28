@@ -1,10 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
-import type { Boundary, ClientMessage, LatLng, PlayerStats, Results as ResultsData, RoomView } from "../../shared/protocol";
-import { fromLocal } from "../../shared/geo";
+import type { ClientMessage, Recap, RoomView } from "../../shared/protocol";
 import Icon, { type IconName } from "../components/Icon";
-import MapView, { type MapDot, type MapLine } from "../components/MapView";
 import { Avatar } from "../components/ui";
-import { useTheme } from "../lib/theme";
+import Replay from "./Replay";
 
 const HEADLINE = { hiders: "HIDERS WIN", seekers: "SEEKERS WIN", none: "GAME OVER" } as const;
 const REASON = { time: "The timer ran out", allTagged: "Every hider was caught", host: "The host ended the game" } as const;
@@ -15,22 +12,30 @@ const AWARD_ICON: Record<string, IconName> = {
   Marathon: "run",
   Moneybags: "coin",
 };
-/** The whole recap plays in about this long, however long the game was. */
-const RECAP_PLAY_MS = 20_000;
-// Team colors for the replay paths (deeper shades read better on the light map).
-const TEAM_COLOR = { dark: { seeker: "#ff3b4e", hider: "#3dff9a" }, light: { seeker: "#e0313f", hider: "#10a85f" } } as const;
 
 function mmss(ms: number) {
   const t = Math.max(0, Math.round(ms / 1000));
   return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
 }
 
-export default function Results({ view, send, onLeave }: { view: RoomView; send: (m: ClientMessage) => void; onLeave: () => void }) {
+export default function Results({
+  view,
+  recap,
+  send,
+  onLeave,
+}: {
+  view: RoomView;
+  /** The match replay, once it has arrived (it comes separately, right as the game ends). */
+  recap: Recap | null;
+  send: (m: ClientMessage) => void;
+  onLeave: () => void;
+}) {
   const r = view.results;
   if (!r) return null;
   const isHost = view.hostId === view.me.id;
   const name = (id: string) => r.stats.find((s) => s.id === id)?.name ?? view.players.find((p) => p.id === id)?.name ?? "?";
   const rows = [...r.stats].sort((a, b) => b.tags - a.tags || (b.survivalMs ?? 0) - (a.survivalMs ?? 0));
+  const showReplay = recap && recap.id === view.recapId && Object.keys(recap.tracks).length > 0;
 
   return (
     <main className="results screen">
@@ -65,7 +70,15 @@ export default function Results({ view, send, onLeave }: { view: RoomView; send:
         </section>
       )}
 
-      {r.recap && Object.keys(r.recap.tracks).length > 0 && <Recap results={r} boundary={view.settings.boundary} />}
+      {showReplay ? (
+        <Replay recap={recap} />
+      ) : (
+        view.recapId && (
+          <section className="card">
+            <p className="hint">Loading the match replay…</p>
+          </section>
+        )
+      )}
 
       <section className="card">
         <div className="card-title">Stats</div>
@@ -111,106 +124,5 @@ export default function Results({ view, send, onLeave }: { view: RoomView; send:
         </button>
       </footer>
     </main>
-  );
-}
-
-/** Animated replay of everyone's movement, built from points recorded every 10 s. */
-function Recap({ results, boundary }: { results: ResultsData; boundary: Boundary | null }) {
-  const recap = results.recap!;
-  const light = useTheme().mode === "light";
-  const duration = Math.max(1, Math.round(results.durationMs / 1000));
-  const [t, setT] = useState(0);
-  const [playing, setPlaying] = useState(true);
-
-  // About 20 frames a second is plenty for dots moving across a map.
-  useEffect(() => {
-    if (!playing) return;
-    const step = (duration * 50) / RECAP_PLAY_MS;
-    const timer = setInterval(() => {
-      setT((cur) => {
-        const next = cur + step;
-        if (next >= duration) {
-          setPlaying(false);
-          return duration;
-        }
-        return next;
-      });
-    }, 50);
-    return () => clearInterval(timer);
-  }, [playing, duration]);
-
-  const byId = useMemo(() => new Map<string, PlayerStats>(results.stats.map((s) => [s.id, s])), [results.stats]);
-
-  const { lines, dots } = useMemo(() => {
-    const lines: MapLine[] = [];
-    const dots: MapDot[] = [];
-    for (const [id, flat] of Object.entries(recap.tracks)) {
-      const stats = byId.get(id);
-      const role = stats?.startRole ?? "hider";
-      const path: LatLng[] = [];
-      let last: { x: number; y: number } | null = null;
-      for (let i = 0; i < flat.length; i += 3) {
-        const [x, y, pt] = [flat[i], flat[i + 1], flat[i + 2]];
-        if (pt <= t) {
-          path.push(fromLocal(recap.origin, x, y));
-          last = { x, y };
-        } else if (last) {
-          // Slide smoothly between recorded points.
-          const prevT = flat[i - 1];
-          const f = (t - prevT) / Math.max(1, pt - prevT);
-          const cur = { x: last.x + (x - last.x) * f, y: last.y + (y - last.y) * f };
-          path.push(fromLocal(recap.origin, cur.x, cur.y));
-          last = cur;
-          break;
-        } else break;
-      }
-      if (!path.length) continue;
-      const ended = flat[flat.length - 1] < t - 10 && t < duration;
-      lines.push({ id, coords: path, color: TEAM_COLOR[light ? "light" : "dark"][role], opacity: 0.75 });
-      const head = path[path.length - 1];
-      dots.push({ id, lat: head.lat, lng: head.lng, className: `recap-pin recap-pin--${role} ${ended ? "recap-pin--gone" : ""}` });
-    }
-    for (const [i, tag] of recap.tags.entries()) {
-      if (tag.t > t) continue;
-      const p = fromLocal(recap.origin, tag.x, tag.y);
-      dots.push({ id: `tag-${i}`, lat: p.lat, lng: p.lng, className: "recap-tag" });
-    }
-    return { lines, dots };
-  }, [recap, t, byId, duration, light]);
-
-  return (
-    <section className="card">
-      <div className="card-title">
-        Replay
-        <span className="eyebrow">Everyone's paths</span>
-      </div>
-      <MapView boundary={boundary} lines={lines} dots={dots} fitKey="recap" className="recap-map" />
-      <div className="recap-controls">
-        <button
-          className="icon-btn"
-          aria-label={playing ? "Pause" : "Play"}
-          onClick={() => {
-            if (!playing && t >= duration) setT(0);
-            setPlaying(!playing);
-          }}
-        >
-          <Icon name={playing ? "pause" : "play"} />
-        </button>
-        <input type="range" min={0} max={duration} step={1} value={Math.round(t)} aria-label="Replay time" onChange={(e) => (setPlaying(false), setT(Number(e.target.value)))} />
-        <span className="recap-time">{mmss(t * 1000)}</span>
-      </div>
-      <div className="recap-legend">
-        <span>
-          <i /> Hiders
-        </span>
-        <span>
-          <i className="seeker" /> Seekers
-        </span>
-        <span>
-          <i className="tag" /> Tags
-        </span>
-      </div>
-      <p className="hint">Location history is deleted when the host starts the next round.</p>
-    </section>
   );
 }
